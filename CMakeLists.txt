@@ -8,7 +8,7 @@ set (SeaHorn_VERSION_TWEAK "rc3")
 
 if (NOT PACKAGE_VERSION)
   set(PACKAGE_VERSION
-    "${SeaHorn_VERSION_MAJOR}.${SeaHorn_VERSION_MINOR}.${SeaHorn_VERSION_PATCH}")
+          "${SeaHorn_VERSION_MAJOR}.${SeaHorn_VERSION_MINOR}.${SeaHorn_VERSION_PATCH}")
   if (DEFINED SeaHorn_VERSION_TWEAK)
     set (PACKAGE_VERSION "${PACKAGE_VERSION}-${SeaHorn_VERSION_TWEAK}")
   endif()
@@ -18,7 +18,7 @@ endif()
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR )
   message (FATAL_ERROR
-    "In-source builds are not allowed. Please clean your source tree and try again.")
+          "In-source builds are not allowed. Please clean your source tree and try again.")
 endif()
 
 enable_testing()
@@ -26,7 +26,7 @@ include (CTest)
 
 # Add path for custom modules
 list (APPEND CMAKE_MODULE_PATH
-  "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 
 option (SEAHORN_STATIC_EXE "Static executable." OFF)
@@ -46,7 +46,7 @@ set (BOOST_COMPONENTS system)
 if (UNIT_TESTS)
   set (BOOST_COMPONENTS ${BOOST_COMPONENTS} unit_test_framework)
 endif()
-  find_package (Boost 1.55 REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+find_package (Boost 1.55 REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 if (Boost_FOUND)
   include_directories (${Boost_INCLUDE_DIRS})
 endif ()
@@ -63,18 +63,18 @@ else()
 endif()
 
 ExternalProject_Add(z3
-  GIT_REPOSITORY  ${Z3_REPO}
-  GIT_TAG ${Z3_TAG}
-  BUILD_IN_SOURCE 1
-  INSTALL_DIR ${CMAKE_BINARY_DIR}/run
-  CONFIGURE_COMMAND env CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-  ./configure -p <INSTALL_DIR> -b build --staticlib ${Z3_DEBUG}
-  BUILD_COMMAND make -j3 -C build
-  INSTALL_COMMAND make -C build install
-  COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_LIST_FILE}
-  LOG_CONFIGURE 1
-  LOG_INSTALL 1
-  LOG_BUILD 1)
+        GIT_REPOSITORY  ${Z3_REPO}
+        GIT_TAG ${Z3_TAG}
+        BUILD_IN_SOURCE 1
+        INSTALL_DIR ${CMAKE_BINARY_DIR}/run
+        CONFIGURE_COMMAND env CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+        ./configure -p <INSTALL_DIR> -b build --staticlib ${Z3_DEBUG}
+        BUILD_COMMAND make -j3 -C build
+        INSTALL_COMMAND make -C build install
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_LIST_FILE}
+        LOG_CONFIGURE 1
+        LOG_INSTALL 1
+        LOG_BUILD 1)
 
 find_package(Z3 4.3.2)
 if (NOT Z3_FOUND)
@@ -89,29 +89,33 @@ else()
   install (PROGRAMS ${Z3_EXECUTABLE} DESTINATION bin)
 endif()
 
+set (LLVM_TAG "llvmorg-3.6.0" CACHE STRING "LLVM git tag to use")
+set (LLVM_REPO "https://github.com/llvm/llvm-project" CACHE STRING "LLVM repo")
 ExternalProject_Add (llvm
-  SVN_REPOSITORY http://llvm.org/svn/llvm-project/llvm/tags/RELEASE_360/final/
-  SOURCE_DIR ${CMAKE_SOURCE_DIR}/ext/llvm
-  INSTALL_DIR ${CMAKE_BINARY_DIR}/run
-  CMAKE_ARGS
-  -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-  -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
-  -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
-  -DLLVM_TARGETS_TO_BUILD:STRING=X86 -DWITH_POLY:BOOL=OFF
-  -DLLVM_ENABLE_PEDANTIC=OFF
-  -DLLVM_ENABLE_PIC=ON -DLLVM_REQUIRES_RTTI:BOOL=TRUE
-  TEST_AFTER_INSTALL 1
-  TEST_COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_LIST_FILE}
-  LOG_CONFIGURE 1
-  LOG_BUILD 1
-  LOG_INSTALL 1)
+        GIT_REPOSITORY  ${LLVM_REPO}
+        GIT_TAG ${LLVM_TAG}
+        SOURCE_DIR ${CMAKE_SOURCE_DIR}/ext/llvm-project
+        SOURCE_SUBDIR "llvm"
+        INSTALL_DIR ${CMAKE_BINARY_DIR}/run
+        CMAKE_ARGS
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
+        -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+        -DLLVM_TARGETS_TO_BUILD:STRING=X86 -DWITH_POLY:BOOL=OFF
+        -DLLVM_ENABLE_PEDANTIC=OFF
+        -DLLVM_ENABLE_PIC=ON -DLLVM_REQUIRES_RTTI:BOOL=TRUE
+        TEST_AFTER_INSTALL 1
+        TEST_COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_LIST_FILE}
+        LOG_CONFIGURE 1
+        LOG_BUILD 1
+        LOG_INSTALL 1)
 
 find_package (LLVM 3.6.0 CONFIG NO_DEFAULT_PATH)
 if (NOT LLVM_FOUND)
   ExternalProject_Get_Property (llvm INSTALL_DIR)
   set (LLVM_ROOT ${INSTALL_DIR})
   set (LLVM_DIR ${LLVM_ROOT}/share/llvm/cmake CACHE PATH
-    "Forced location of LLVM cmake config" FORCE)
+          "Forced location of LLVM cmake config" FORCE)
   message (WARNING "No llvm found. Run \n\tcmake --build . && cmake ${CMAKE_SOURCE_DIR}")
   return()
 else()
@@ -143,32 +147,32 @@ endif()
 install (FILES ${CMAKE_CURRENT_SOURCE_DIR}/README.md DESTINATION .)
 # install all the licenses
 install (FILES  ${CMAKE_CURRENT_SOURCE_DIR}/license.txt
-  DESTINATION share/doc/seahorn
-  RENAME seahorn_license.txt)
+        DESTINATION share/doc/seahorn
+        RENAME seahorn_license.txt)
 
 if (EXISTS z3-prefix/src/z3/LICENSE.txt)
   install (
-    FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/LICENSE.txt
-    DESTINATION share/doc/seahorn
-    RENAME z3_license.txt)
+          FILES
+          ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/LICENSE.txt
+          DESTINATION share/doc/seahorn
+          RENAME z3_license.txt)
 endif()
 
 if (EXISTS ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6)
   install (
-    PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6
-    DESTINATION bin)
+          PROGRAMS
+          ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6
+          DESTINATION bin)
 endif()
 
 if (EXISTS ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build)
   file(GLOB z3py
-    ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.py?
-    ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.py?
-    ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.so
-    ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.dylib
-    ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.dll
-    )
+          ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.py?
+          ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.py?
+          ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.so
+          ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.dylib
+          ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build/*.dll
+          )
   install(FILES ${z3py} DESTINATION lib/z3py)
 endif()
 
@@ -181,27 +185,24 @@ else()
   set(GMPXX_LIB "")
 endif()
 
-find_package(OpenMP)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-
 install(DIRECTORY include/
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.hpp"
-  PATTERN "*.hh"
-  PATTERN "*.h"
-  PATTERN ".svn" EXCLUDE
-  )
+        DESTINATION include
+        FILES_MATCHING
+        PATTERN "*.hpp"
+        PATTERN "*.hh"
+        PATTERN "*.h"
+        PATTERN ".svn" EXCLUDE
+        )
 
 install(DIRECTORY ${CMAKE_BINARY_DIR}/include/
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.hpp"
-  PATTERN "*.hh"
-  PATTERN "*.h"
-  PATTERN "CMakeFiles" EXCLUDE
-  PATTERN ".svn" EXCLUDE
-  )
+        DESTINATION include
+        FILES_MATCHING
+        PATTERN "*.hpp"
+        PATTERN "*.hh"
+        PATTERN "*.h"
+        PATTERN "CMakeFiles" EXCLUDE
+        PATTERN ".svn" EXCLUDE
+        )
 
 set(CMAKE_CXX_EXTENSIONS ON)
 add_definitions(-Wno-redeclared-class-member -Wno-sometimes-uninitialized)
@@ -217,7 +218,7 @@ include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR}/include)
 ### add our include directories to the front, overriding directories
 ### specified by external packages.
 include_directories(BEFORE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_BINARY_DIR}/include)
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include)
 
 add_subdirectory(tools)
