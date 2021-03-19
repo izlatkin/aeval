@@ -5,12 +5,18 @@
 
 #include <boost/functional/hash.hpp>
 
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Value.h"
-#include "llvm/ADT/APInt.h"
-#include "llvm/IR/Constants.h"
+#include "utils/llvm/support/raw_ostream.h"
+#include "utils/llvm/IR/Function.h"
+#include "utils/llvm/IR/BasicBlock.h"
+#include "utils/llvm/IR/Value.h"
+#include "utils/llvm/ADT/APInt.h"
+#include "utils/llvm/IR/Constants.h"
+//#include "llvm/Support/raw_ostream.h"
+//#include "llvm/IR/Function.h"
+//#include "llvm/IR/BasicBlock.h"
+//#include "llvm/IR/Value.h"
+//#include "llvm/ADT/APInt.h"
+//#include "llvm/IR/Constants.h"
 
 #include <boost/lexical_cast.hpp>
 
@@ -25,8 +31,8 @@ namespace expr
     return OS;
   }
 
-  inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, 
-				       const ENode &n)
+  inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS,
+                                         const ENode &n)
   {
     OS << boost::lexical_cast<std::string> (n);
     return OS;

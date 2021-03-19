@@ -1,4 +1,5 @@
 add_executable (aeval Ae.cpp)
+target_compile_features(aeval PUBLIC cxx_std_11)
 target_link_libraries (aeval ${Z3_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${GMPXX_LIB} ${GMP_LIB})
-llvm_config (aeval bitwriter)
+#llvm_config (aeval bitwriter)
 install(TARGETS aeval RUNTIME DESTINATION bin)

@@ -7,6 +7,7 @@
 #include "Z3n.hpp"
 
 #include "llvm/Support/raw_ostream.h"
+#include "utils/llvm/support/raw_ostream.h"
 #include "ufo/ExprLlvm.hpp"
 
 namespace ufo

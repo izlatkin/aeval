@@ -89,59 +89,59 @@ else()
   install (PROGRAMS ${Z3_EXECUTABLE} DESTINATION bin)
 endif()
 
-set (LLVM_TAG "llvmorg-3.6.0" CACHE STRING "LLVM git tag to use")
-set (LLVM_REPO "https://github.com/llvm/llvm-project" CACHE STRING "LLVM repo")
-ExternalProject_Add (llvm
-        GIT_REPOSITORY  ${LLVM_REPO}
-        GIT_TAG ${LLVM_TAG}
-        SOURCE_DIR ${CMAKE_SOURCE_DIR}/ext/llvm-project
-        SOURCE_SUBDIR "llvm"
-        INSTALL_DIR ${CMAKE_BINARY_DIR}/run
-        CMAKE_ARGS
-        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-        -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
-        -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
-        -DLLVM_TARGETS_TO_BUILD:STRING=X86 -DWITH_POLY:BOOL=OFF
-        -DLLVM_ENABLE_PEDANTIC=OFF
-        -DLLVM_ENABLE_PIC=ON -DLLVM_REQUIRES_RTTI:BOOL=TRUE
-        TEST_AFTER_INSTALL 1
-        TEST_COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_LIST_FILE}
-        LOG_CONFIGURE 1
-        LOG_BUILD 1
-        LOG_INSTALL 1)
+#set (LLVM_TAG "llvmorg-3.6.0" CACHE STRING "LLVM git tag to use")
+#set (LLVM_REPO "https://github.com/llvm/llvm-project" CACHE STRING "LLVM repo")
+#ExternalProject_Add (llvm
+#        GIT_REPOSITORY  ${LLVM_REPO}
+#        GIT_TAG ${LLVM_TAG}
+#        SOURCE_DIR ${CMAKE_SOURCE_DIR}/ext/llvm-project
+#        SOURCE_SUBDIR "llvm"
+#        INSTALL_DIR ${CMAKE_BINARY_DIR}/run
+#        CMAKE_ARGS
+#        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+#        -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
+#        -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+#        -DLLVM_TARGETS_TO_BUILD:STRING=X86 -DWITH_POLY:BOOL=OFF
+#        -DLLVM_ENABLE_PEDANTIC=OFF
+#        -DLLVM_ENABLE_PIC=ON -DLLVM_REQUIRES_RTTI:BOOL=TRUE
+#        TEST_AFTER_INSTALL 1
+#        TEST_COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_LIST_FILE}
+#        LOG_CONFIGURE 1
+#        LOG_BUILD 1
+#        LOG_INSTALL 1)
 
-find_package (LLVM 3.6.0 CONFIG NO_DEFAULT_PATH)
-if (NOT LLVM_FOUND)
-  ExternalProject_Get_Property (llvm INSTALL_DIR)
-  set (LLVM_ROOT ${INSTALL_DIR})
-  set (LLVM_DIR ${LLVM_ROOT}/share/llvm/cmake CACHE PATH
-          "Forced location of LLVM cmake config" FORCE)
-  message (WARNING "No llvm found. Run \n\tcmake --build . && cmake ${CMAKE_SOURCE_DIR}")
-  return()
-else()
-  set_target_properties(llvm PROPERTIES EXCLUDE_FROM_ALL ON)
-
-  message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-  message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
-
-  # We incorporate the CMake features provided by LLVM:
-  list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-  include(AddLLVM)
-  include(HandleLLVMOptions)
-  set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bin)
-  set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib)
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LLVM_LDFLAGS}")
-
-  set(LLVM_REQUIRES_RTTI TRUE)
-  set(LLVM_REQUIRES_EH TRUE)
-
-  include_directories(${LLVM_INCLUDE_DIRS})
-  link_directories(${LLVM_LIBRARY_DIRS})
-  add_definitions(${LLVM_DEFINITIONS})
-
-endif()
+#find_package (LLVM 3.6.0 CONFIG NO_DEFAULT_PATH)
+#if (NOT LLVM_FOUND)
+#  ExternalProject_Get_Property (llvm INSTALL_DIR)
+#  set (LLVM_ROOT ${INSTALL_DIR})
+#  set (LLVM_DIR ${LLVM_ROOT}/share/llvm/cmake CACHE PATH
+#          "Forced location of LLVM cmake config" FORCE)
+#  message (WARNING "No llvm found. Run \n\tcmake --build . && cmake ${CMAKE_SOURCE_DIR}")
+#  return()
+#else()
+#  set_target_properties(llvm PROPERTIES EXCLUDE_FROM_ALL ON)
+#
+#  message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+#  message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+#
+#  # We incorporate the CMake features provided by LLVM:
+#  list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+#  include(AddLLVM)
+#  include(HandleLLVMOptions)
+#  set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bin)
+#  set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib)
+#
+#  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
+#  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LLVM_LDFLAGS}")
+#
+#  set(LLVM_REQUIRES_RTTI TRUE)
+#  set(LLVM_REQUIRES_EH TRUE)
+#
+#  include_directories(${LLVM_INCLUDE_DIRS})
+#  link_directories(${LLVM_LIBRARY_DIRS})
+#  add_definitions(${LLVM_DEFINITIONS})
+#
+#endif()
 
 
 install (FILES ${CMAKE_CURRENT_SOURCE_DIR}/README.md DESTINATION .)
@@ -158,12 +158,12 @@ if (EXISTS z3-prefix/src/z3/LICENSE.txt)
           RENAME z3_license.txt)
 endif()
 
-if (EXISTS ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6)
-  install (
-          PROGRAMS
-          ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6
-          DESTINATION bin)
-endif()
+#if (EXISTS ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6)
+#  install (
+#          PROGRAMS
+#          ${CMAKE_CURRENT_BINARY_DIR}/llvm-prefix/src/llvm-build/bin/clang-3.6
+#          DESTINATION bin)
+#endif()
 
 if (EXISTS ${CMAKE_CURRENT_BINARY_DIR}/z3-prefix/src/z3/build)
   file(GLOB z3py
