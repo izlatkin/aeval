@@ -151,6 +151,7 @@ namespace ufo
      */
     boost::tribool implies (Expr a, Expr b)
     {
+      if (a == b) return true;
       if (isOpX<TRUE>(b)) return true;
       if (isOpX<FALSE>(a)) return true;
       return ! isSat(a, mkNeg(b));
@@ -440,14 +441,6 @@ namespace ufo
           return true;
         }
       }
-
-//      for (auto & a : cands)
-//      {
-//        for (auto & b : a.second)
-//        {
-//          if (containsOp<FORALL>(b)) return true;
-//        }
-//      }
       return false;
     }
 
@@ -473,7 +466,54 @@ namespace ufo
       v.insert(e);
     }
 
-    Expr getTrueLiterals(Expr ex, Expr model)
+    Expr getTrueLiterals(Expr ex)
+    {
+      ZSolver<EZ3>::Model m = smt.getModel();
+      return getTrueLiterals(ex, m);
+    }
+
+    Expr getTrueLiterals(Expr ex, ZSolver<EZ3>::Model &m)
+    {
+      ExprVector ites;
+      getITEs(ex, ites);
+      if (ites.empty())
+      {
+        ExprSet tmp;
+        getLiterals(ex, tmp);
+
+        for (auto it = tmp.begin(); it != tmp.end(); ){
+          if (isOpX<TRUE>(m.eval(*it))) ++it;
+          else it = tmp.erase(it);
+        }
+        return conjoin(tmp, efac);
+      }
+      else
+      {
+        // eliminate ITEs first
+        for (auto it = ites.begin(); it != ites.end();)
+        {
+          if (isOpX<TRUE>(m((*it)->left())))
+          {
+            ex = replaceAll(ex, *it, (*it)->right());
+            ex = mk<AND>(ex, (*it)->left());
+          }
+          else if (isOpX<FALSE>(m((*it)->left())))
+          {
+            ex = replaceAll(ex, *it, (*it)->last());
+            ex = mk<AND>(ex, mkNeg((*it)->left()));
+          }
+          else
+          {
+            ex = replaceAll(ex, *it, (*it)->right()); // TODO
+            ex = mk<AND>(ex, mk<EQ>((*it)->right(), (*it)->last()));
+          }
+          it = ites.erase(it);
+        }
+        return getTrueLiterals(ex, m);
+      }
+    }
+
+    Expr getTrueLiteralsOld(Expr ex, Expr model)
     {
       ExprVector ites;
       getITEs(ex, ites);
@@ -504,13 +544,13 @@ namespace ufo
           }
           it = ites.erase(it);
         }
-        return getTrueLiterals(simplifyBool(simplifyArithm(ex)), model);
+        return getTrueLiteralsOld(simplifyBool(simplifyArithm(ex)), model);
       }
     }
 
     Expr getWeakerMBP(Expr mbp, Expr fla, ExprVector& srcVars)
     {
-      if (containsOp<ARRAY_TY>(fla)) return mbp;
+      if (srcVars.empty() || containsOp<ARRAY_TY>(fla)) return mbp;
 
       ExprSet cnjs;
       getConj(mbp, cnjs);
@@ -520,10 +560,15 @@ namespace ufo
       filter (fla, bind::IsConst (), inserter(varsSet, varsSet.begin()));
       minusSets(varsSet, srcVars);
 
-      ExprVector args;
-      for (auto & v : varsSet) args.push_back(v->left());
-      args.push_back(fla);
-      Expr efla = mknary<EXISTS>(args);
+      Expr efla;
+      if (varsSet.empty()) efla = fla;
+      else
+      {
+        ExprVector args;
+        for (auto & v : varsSet) args.push_back(v->left());
+        args.push_back(fla);
+        efla = mknary<EXISTS>(args);
+      }
 
       bool prog = true;
       while (prog)
@@ -542,6 +587,14 @@ namespace ufo
         }
       }
       return conjoin(cnjs, efac);
+    }
+
+    template <typename Range> Expr findEquiv(Range r, Expr e)
+    {
+      if (r.empty()) return NULL;
+      if (find(r.begin(), r.end(), e) != r.end()) return e;
+      for (auto & t : r) if ((bool)isEquiv(t, e)) return t;
+      return NULL;
     }
 
     void print (Expr e)

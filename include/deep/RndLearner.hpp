@@ -47,6 +47,7 @@ namespace ufo
     bool addepsilon;          // add some small probability to features that never happen in the code
     bool aggressivepruning;   // aggressive pruning of the search space based on SAT/UNSAT (WARNING: may miss some invariants)
 
+    bool statsInitialized = false;
     bool printLog;
 
     public:
@@ -570,6 +571,7 @@ namespace ufo
 
     void calculateStatistics()
     {
+      statsInitialized = true;
       for (int i = 0; i < invNumber; i++)
       {
         sfs[i].back().calculateStatistics(densecode, addepsilon);

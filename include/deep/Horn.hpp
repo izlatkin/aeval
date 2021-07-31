@@ -177,11 +177,11 @@ namespace ufo
       {
         r = mk<IMPL>(r->first(), mk<FALSE>(m_efac));
       }
-      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->left()) && hasUninterp(r->left()))
+      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->left()))
       {
         r = mk<IMPL>(r->left()->left(), r->right());
       }
-      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->right()) && hasUninterp(r->right()))
+      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->right()))
       {
         r = mk<IMPL>(r->right()->left(), r->left());
       }
@@ -277,18 +277,30 @@ namespace ufo
 
         hr.assignVarsAndRewrite (origSrcSymbs, invVars[hr.srcRelation],
                                  origDstSymbs, invVarsPrime[hr.dstRelation]);
-        if (qeUnsupported(hr.body))
-          hr.body = simpleQE(hr.body, hr.locVars);
-        else
-          hr.body = eliminateQuantifiers(hr.body, hr.locVars);
+        if (doElim)
+        {
+          if (qeUnsupported(hr.body))
+            hr.body = simpleQE(hr.body, hr.locVars);
+          else
+            hr.body = eliminateQuantifiers(hr.body, hr.locVars);
+        }
 
         hr.body = u.removeITE(hr.body);
       }
       if (doElim) eliminateDecls();
+      else splitCHCs();
 
       for (int i = 0; i < chcs.size(); i++)
         outgs[chcs[i].srcRelation].push_back(i);
 
+      for (auto & d : decls){
+        outs () << "outgs from " << *d->left() << ":\n";
+        for (auto & o : outgs[d->left()])
+        {
+          outs () << "     (" << o << ")  -> " << *chcs[o].dstRelation << "\n";
+//          outs () << "       " << *simplifyBool(chcs[o].body) << "\n";
+        }
+      }
       // sort rules
       wtoSort();
     }
@@ -637,6 +649,45 @@ namespace ufo
       if (updateSrc) updateTodo(hr->srcRelation, num);
       if (updateDst) updateTodo(hr->dstRelation, num);
       chcsToVisit.erase(num);
+    }
+
+    void splitCHCs()
+    {
+      for (int i = 0; i < chcs.size(); )
+      {
+        auto & hr = chcs [i];
+        Expr body = hr.body;
+        // naive ITE-splits
+        ExprVector ites;
+        getITEs(body, ites);
+        if (ites.empty()) { i++; continue; }
+
+        Expr it = *ites.begin();
+        Expr lb = mk<AND>(it->left(), replaceAll(body, it, it->right()));
+        Expr rb = mk<AND>(mkNeg(it->left()), replaceAll(body, it, it->last()));
+        if ((bool)u.isFalse(lb)) body = rb;
+        else if ((bool)u.isFalse(rb)) body = lb;
+        else body = mk<OR>(lb, rb);
+        ExprSet dsjs;
+        getDisj(body, dsjs);
+//        outs () << "      SANITY: " << (bool)u.isEquiv(hr.body, body) << "\n";
+        bool first = true;
+        for (auto & d : dsjs)
+        {
+          if (first)
+          {
+            hr.body = d;
+            first = false;
+          }
+          else
+          {
+            auto hrNew = hr;     // copy orig
+            hrNew.body = d;
+            chcs.push_back(hrNew);
+          }
+        }
+      }
+//      outs () << "upd decls size = " << chcs.size() << "\n";
     }
 
     bool hasCycles()
@@ -1004,27 +1055,42 @@ namespace ufo
     {
       outs() << "CHCs:\n";
       for (auto &hr: chcs){
-        if (full && hr.isFact) outs() << "  INIT:\n";
-        if (full && hr.isInductive) outs() << "  TRANSITION RELATION:\n";
-        if (full && hr.isQuery) outs() << "  BAD:\n";
+        print (hr, full);
+      }
+    }
 
-        outs () << "    " << * hr.srcRelation;
-        if (full && hr.srcVars.size() > 0)
-        {
-          outs () << " (";
-          for(auto &a: hr.srcVars) outs() << *a << ", ";
-          outs () << "\b\b)";
-        }
-        outs () << " -> " << * hr.dstRelation;
+    void print (HornRuleExt& hr, bool full)
+    {
+      if (full)
+      {
+        if (hr.isFact) outs() << "  INIT:\n";
+        else if (hr.isQuery) outs() << "  BAD:\n";
+        else outs() << "  CHC:\n";
+      }
 
-        if (full && hr.dstVars.size() > 0)
-        {
-          outs () << " (";
-          for(auto &a: hr.dstVars) outs() << *a << ", ";
-          outs () << "\b\b)";
-        }
-        if (full) outs() << "\n    body: " << * hr.body << "\n";
-        else outs() << "\n";
+      outs () << "    " << * hr.srcRelation;
+      if (full && hr.srcVars.size() > 0)
+      {
+        outs () << " (";
+        for(auto &a: hr.srcVars) outs() << *a << ", ";
+        outs () << "\b\b)";
+      }
+      outs () << " -> " << * hr.dstRelation;
+
+      if (full && hr.dstVars.size() > 0)
+      {
+        outs () << " (";
+        for(auto &a: hr.dstVars) outs() << *a << ", ";
+        outs () << "\b\b)";
+      }
+      if (full) outs() << "\n    body: " << * hr.body << "\n";
+      else outs() << "\n";
+
+      if (full && hr.locVars.size() > 0)
+      {
+        outs () << "    loc vars: ";
+        for(auto &a: hr.locVars) outs() << *a << ", ";
+        outs () << "\n\n";
       }
     }
   };

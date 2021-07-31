@@ -1,14 +1,17 @@
 #ifndef RNDLEARNERV3__HPP__
 #define RNDLEARNERV3__HPP__
 
-#include "RndLearner.hpp"
+#include "RndLearnerV2.hpp"
+#include "BndExpl.hpp"
 
 #ifdef HAVE_ARMADILLO
 #include "DataLearner.hpp"
 #endif
 
+
 using namespace std;
 using namespace boost;
+
 namespace ufo
 {
   struct ArrAccessIter
@@ -588,7 +591,7 @@ namespace ufo
           for (auto b : cand.second)
           {
             b = simplifyArithm(b);
-            if (containsOp<ARRAY_TY>(b) || findNonlin(b))
+            if (!statsInitialized || containsOp<ARRAY_TY>(b) || findNonlin(b))
             {
               sf.learnedExprs.insert(b);
             }
@@ -620,6 +623,7 @@ namespace ufo
     bool synthesizeDisjLemmas(int invNum, int cycleNum, Expr rel,
                               Expr cnd, Expr splitter, Expr ind, unsigned depth, Expr lastModel = NULL)
     {
+//      outs () << "\n[#"<< cnt++ << ", " << depth << "] synthesizeDisjLemmas  >>> " << *cnd << ": " << *splitter << "\n";
       if (dCandNum++ == dAttNum || depth == dDepNum) return true;
       Expr invs = conjoin(sfs[invNum].back().learnedExprs, m_efac);
 
@@ -634,14 +638,14 @@ namespace ufo
 
       ExprVector mbps;
 
-      while (true)
-      {
+      while (true) {
         Expr avail = mkNeg(disjoin(mbps, m_efac));
         Expr fla = mk<AND>(splitter, cndSsa);     // to weaken MBP further
 
         if (lastModel == NULL) {
           if (isOpX<TRUE>(splitter) && u.isSat(avail, prefs[invNum], cndSsaPr)) {
             fla = mk<AND>(prefs[invNum], cndSsaPr);
+            // TODO: create (new) MBPs here
           } else if (u.isSat(avail, splitter, cndSsaPr)) {
             fla = mk<AND>(splitter, cndSsaPr);
           } else if (u.isSat(avail, splitter, cndSsa)) {
@@ -652,9 +656,10 @@ namespace ufo
         }
 
         if (lastModel == NULL) break;
+
         Expr mbp = u.getWeakerMBP(
                      keepQuantifiers (
-                       u.getTrueLiterals(ssas[invNum], lastModel), srcVars), fla, srcVars);
+                       u.getTrueLiteralsOld(ssas[invNum], lastModel), srcVars), fla, srcVars);
 
         bool toadd = true;
         for (int j = 0; j < mbps.size(); j++)
@@ -665,7 +670,7 @@ namespace ufo
             break;
           }
         if (toadd) mbps.push_back(mbp);
-        if (isOpX<FORALL>(cnd)) break;    // temporary workaround for arrays (z3 might fail in giving models)
+        if (isOpX<FORALL>(cnd)) break; // temporary workarond for arrays (z3 might fail in giving models)
         if (dAllMbp)
           lastModel = NULL;
         else
@@ -822,6 +827,7 @@ namespace ufo
         candidates.clear();
         SamplFactory& sf = sfs[invNum].back();
         Expr cand;
+
         if (deferredCandidates[invNum].empty())
           cand = sf.getFreshCandidate(i < 25);  // try simple array candidates first
         else {
@@ -841,7 +847,7 @@ namespace ufo
         {
           dCandNum = 0;
           lemma_found = synthesizeDisjLemmas(invNum, cycleNum, rel, cand, mk<TRUE>(m_efac), mk<TRUE>(m_efac), 0) &&
-                        multiHoudini(ruleManager.wtoCHCs);
+            /*bootstrap(true);*/multiHoudini(ruleManager.wtoCHCs);
         }
         if (lemma_found)
         {
@@ -937,8 +943,8 @@ namespace ufo
                 if (hr.isFact)
                 {
                   Expr failedCand = normalizeDisj(*it, invVars);
-//                  outs () << "failed cand for " << *hr.dstRelation << ": " << *failedCand << "\n";
-                  if (sf.initialized > 0)
+//                  outs () << "      >>>>>> failed cand for " << *hr.dstRelation << ": " << *failedCand << "\n\n";
+                  if (statsInitialized && sf.initialized > 0)
                   {
                     Sampl& s = sf.exprToSampl(failedCand);
                     sf.assignPrioritiesForFailed();
@@ -949,6 +955,7 @@ namespace ufo
                   if (isOpX<EQ>(*it)) deferredCandidates[invNum].push_back(*it);  //  prioritize equalities
                   else deferredCandidates[invNum].push_front(*it);
                 }
+//                outs () << "      >>>>>> failed cand for " << *hr.dstRelation << ": " << **it << "\n\n";
                 it = ev.erase(it);
                 res2 = false;
               }
@@ -1287,12 +1294,16 @@ namespace ufo
         {
           if (!u.isSat(mk<NEG>(a))) continue;
           a = simplifyArithm(normalize(a));
-          if (printLog) outs () << "CAND FROM DATA: " << *a << "\n";
+          if (printLog)
+            outs () << "CAND FROM DATA 1: " << *a << "\n";
 
           if (toProp) propagate(dcl, a, true);
 
           if (containsOp<ARRAY_TY>(a))
+          {
+            outs () << "ARRCAND FROM DATA 1: " << *a << "\n";
             arrCands[invNum].insert(a);
+          }
           else
             u.insertUnique(a, dst);
           if (isNumericConst(a->right()))
@@ -1308,10 +1319,14 @@ namespace ufo
                   Expr e = simplifyArithm(normalize(mk<EQ>(a->left(), mk<MULT>(mkMPZ(i1/i2, m_efac), c))));
                   if (!u.isSat(mk<NEG>(e))) continue;
                   if (containsOp<ARRAY_TY>(e))
+                  {
+                    outs () << "ARRCAND FROM DATA 2: " << *e << "\n";
                     arrCands[invNum].insert(e);
+                  }
                   else
                     u.insertUnique(e, dst);
-                  if (printLog) outs () << "CAND FROM DATA: " << *e << "\n";
+                  if (printLog)
+                    outs () << "CAND FROM DATA 2: " << *e << "\n";
                 }
             }
           }
@@ -1411,6 +1426,8 @@ namespace ufo
         }
       }
 
+      outs () << "Incomplete ";
+      printSolution(false);
       return false;
     }
 
@@ -1599,7 +1616,75 @@ namespace ufo
         assert(hasOnlyVars(res, ruleManager.invVars[rel]));
       }
     }
+
+    void getInvs(ExprMap& invs)
+    {
+      for (int i = 0; i < decls.size(); i++)
+      {
+        Expr rel = decls[i];
+        SamplFactory& sf = sfs[i].back();
+        ExprSet lms = sf.learnedExprs;
+        invs[rel] = conjoin(lms, m_efac);
+      }
+    }
+
+//    bool checkInvariant(Expr e){
+//      outs () << "  checking: " << *e << "\n";
+//      outs () << "  cur lemmas: " << *sfs[0].back().getAllLemmas() << "\n";
+//      addCandidate(0, e);
+//      if (multiHoudini(ruleManager.wtoCHCs)) assignPrioritiesForLearned();
+//      return (bool)u.implies(sfs[0].back().getAllLemmas(), e);
+//    }
+//
+//    static bool checkInvariantStatic(void* arg, Expr e) {
+//      RndLearnerV3* that = (RndLearnerV3*)arg;
+//      return that->checkInvariant(e);
+//    }
   };
+
+  inline void testgen(string smt, set<int>& nums, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
+                               bool enableDataLearning, bool doElim, bool doDisj,
+                               bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp)
+  {
+    ExprFactory m_efac;
+    EZ3 z3(m_efac);
+
+    CHCs ruleManager(m_efac, z3);
+    ruleManager.parse(smt, true);  // used to be doElim
+    BndExpl bnd(ruleManager);
+
+    RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, dAllMbp, dAddProp, dAddDat, dStrenMbp);
+    map<Expr, ExprSet> cands;
+    for (auto& dcl: ruleManager.decls) ds.initializeDecl(dcl);
+    for (int i = 0; i < ruleManager.cycles.size(); i++)
+    {
+      Expr pref = bnd.compactPrefix(i);
+      Expr rel = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
+      ExprSet tmp;
+      getConj(pref, tmp);
+      for (auto & t : tmp)
+        if (hasOnlyVars(t, ruleManager.invVars[rel]))
+          cands[rel].insert(t);
+      ds.mutateHeuristicEq(cands[rel], cands[rel], rel, true);
+      ds.initializeAux(bnd, i, pref);
+    }
+    if (enableDataLearning) ds.getDataCandidates(cands);
+    for (auto& dcl: ruleManager.wtoDecls) ds.addCandidates(dcl, cands[dcl]);
+    //    for (auto& dcl: ruleManager.wtoDecls) ds.getSeeds(dcl, cands);    // GF: weird, takes long
+    ds.refreshCands(cands);
+    for (auto& dcl: ruleManager.decls) ds.doSeedMining(dcl->arg(0), cands[dcl->arg(0)], false);
+    ds.bootstrap(doDisj);
+
+    if (nums.size() > 0)
+    {
+      CHCs ruleManager1(m_efac, z3);
+      ruleManager1.parse(smt, false);
+
+      BndExpl bnd1(ruleManager1);
+      ds.getInvs(bnd1.getInvs());
+      bnd1.exploreTracesTG(nums, 1, 20);
+    }
+  }
 
   inline void learnInvariants3(string smt, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
                                bool enableDataLearning, bool doElim, bool doDisj,
