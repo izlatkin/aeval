@@ -1644,7 +1644,7 @@ namespace ufo
 
   inline void testgen(string smt, set<int>& nums, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
                                bool enableDataLearning, bool doElim, bool doDisj,
-                               bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp)
+                               bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp, bool toSkip)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
@@ -1682,7 +1682,7 @@ namespace ufo
 
       BndExpl bnd1(ruleManager1);
       ds.getInvs(bnd1.getInvs());
-      bnd1.exploreTracesTG(nums, 1, 20);
+      bnd1.exploreTracesTG(nums, 1, 20, toSkip);
     }
   }
 

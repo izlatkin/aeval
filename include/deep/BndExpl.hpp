@@ -218,7 +218,7 @@ namespace ufo
       }
     }
 
-    void exploreTracesTG(set<int>& keys, int cur_bnd, int bnd)
+    void exploreTracesTG(set<int>& keys, int cur_bnd, int bnd, bool skipTerm)
     {
       map<int, Expr> eKeys;
       for (auto & k : keys)
@@ -268,7 +268,7 @@ namespace ufo
       set<vector<int>> unsat_prefs;
       while (cur_bnd <= bnd && !todoCHCs.empty())
       {
-        outs () << "new iter with cur_bnd = "<< cur_bnd<<"\n";
+        outs () << "new iter with cur_bnd = "<< cur_bnd <<"\n";
         set<int> toErCHCs;
         for (auto & a : todoCHCs)
         {
@@ -284,8 +284,9 @@ namespace ufo
 
           int tot = 0;
           int tot2 = 0;
-          for (auto  &t : traces)
+          for (int trNum = 0; trNum < traces.size() && !todoCHCs.empty(); trNum++)
           {
+            auto & t = traces[trNum];
             set<int> apps;
             for (auto c : t)
               if (find(todoCHCs.begin(), todoCHCs.end(), c) != todoCHCs.end() &&
@@ -315,7 +316,6 @@ namespace ufo
             if (already_unsat) continue;
 
             tot++;
-            kVers.clear();
 
             auto & hr = ruleManager.chcs[t.back()];
             Expr lms = invs[hr.srcRelation];
@@ -327,30 +327,69 @@ namespace ufo
               continue;
             }
 
-            if (bool(u.isSat(toExpr(t))))
+            int suff = 1;
+            bool suffFound = false;
+            kVers.clear();
+            if (bool(!u.isSat(toExpr(t))))
             {
-              printTest();
-              outs () << "\n    visited: ";
-              for ( auto & b : apps)
-              {
-                toErCHCs.insert(b);
-                outs () << b << ", ";
-              }
-              outs () << "\b\n      SAT trace: true ";
-              for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
-              outs () << "\n       Model:\n";
-              for (auto k : kVers)
-              {
-                outs () << "     ~ ~ for " << k.first << ": " << u.getModel(k.second) << "\n";
-              }
-
-              if (todoCHCs.empty())
-              {
-                break;
-              }
+              unsat_prefs.insert(t);
+              continue;
             }
             else
-              unsat_prefs.insert(t);
+            {
+              if (hr.dstRelation == ruleManager.failDecl || skipTerm)
+              {
+                printTest();
+                outs () << "\n    visited: ";
+                for ( auto & b : apps)
+                {
+                  toErCHCs.insert(b);
+                  outs () << b << ", ";
+                }
+                outs () << "\b\n      SAT trace: true ";
+                for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
+                outs () << "\n       Model:\n";
+                for (auto k : kVers)
+                {
+                  outs () << "     ~ ~ for " << k.first << ": " << u.getModel(k.second) << "\n";
+                }
+                suffFound = true;
+              }
+              // default
+            }
+
+            while (!suffFound && suff < (bnd - cur_bnd))
+            {
+//              outs () << "     finding happy ending = " << suff;
+              vector<vector<int>> tracesSuf;
+              getAllTraces(hr.dstRelation, ruleManager.failDecl, suff++, vector<int>(), tracesSuf);
+//              outs () << "    (" << tracesSuf.size() << ")\n";
+              for (auto tr : tracesSuf)
+              {
+                tr.insert(tr.begin(), t.begin(), t.end());
+
+                kVers.clear();
+                if (bool(u.isSat(toExpr(tr))))
+                {
+                  printTest();
+                  outs () << "\n    visited: ";
+                  for ( auto & b : apps)
+                  {
+                    toErCHCs.insert(b);
+                    outs () << b << ", ";
+                  }
+                  outs () << "\b\n      SAT trace: true ";
+                  for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
+                  outs () << "\n       Model:\n";
+                  for (auto k : kVers)
+                  {
+                    outs () << "     ~ ~ for " << k.first << ": " << u.getModel(k.second) << "\n";
+                  }
+                  suffFound = true;
+                  break;
+                }
+              }
+            }
           }
           outs () << "    -> actually explored:  " << tot << "/" << tot2 << ", |unsat prefs| = " << unsat_prefs.size() << "\n";
         }
