@@ -90,6 +90,7 @@ const char *OPT_D1 = "--all-mbp";
 const char *OPT_D2 = "--phase-prop";
 const char *OPT_D3 = "--phase-data";
 const char *OPT_D4 = "--stren-mbp";
+const char *OPT_PROP = "--prop";
 
 int main (int argc, char ** argv)
 {
@@ -115,6 +116,7 @@ int main (int argc, char ** argv)
   bool d_p = getBoolValue(OPT_D2, false, argc, argv);
   bool d_d = getBoolValue(OPT_D3, false, argc, argv);
   bool d_s = getBoolValue(OPT_D4, false, argc, argv);
+  int do_prop = getIntValue(OPT_PROP, 0, argc, argv);
 
   if (do_disj && (!d_p && !d_d))
   {
@@ -127,6 +129,6 @@ int main (int argc, char ** argv)
   if (do_disj) do_dl = true;
 
   testgen(string(argv[argc-1]), nums, max_attempts, to, densecode, aggressivepruning,
-                     do_dl, do_elim, do_disj, d_m, d_p, d_d, d_s, to_skip);
+                     do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s, to_skip);
   return 0;
 }

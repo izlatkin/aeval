@@ -149,6 +149,11 @@ namespace ufo
     return typeOf(a) == mk<INT_TY>(a->getFactory());
   }
 
+  inline static bool isNumericEq(Expr a)
+  {
+    return isOpX<EQ>(a) && isNumeric(a->left());
+  }
+
   inline static void findComplexNumerics (Expr a, ExprSet &terms)
   {
     if (isIntConst(a) || isOpX<MPZ>(a)) return;
@@ -1806,6 +1811,26 @@ namespace ufo
     return c.size();
   }
 
+  Expr projectITE(Expr ite, Expr var)
+  {
+    if (isOpX<ITE>(ite))
+    {
+      return mk<ITE>(ite->arg(0), projectITE(ite->arg(1), var), projectITE(ite->arg(2), var));
+    }
+    else
+    {
+      ExprSet cnjs;
+      getConj(ite, cnjs);
+      for (auto & a : cnjs)
+      {
+        if (a->left() == var) return a->right();
+        else if (a->right() == var) return a->left();
+      }
+
+      assert(0);
+    }
+  }
+
   inline static void productAnd (ExprSet& as, ExprSet& bs, ExprSet& ps)
   {
     for (auto &a : as)
@@ -2535,7 +2560,14 @@ namespace ufo
   template<typename Range> static Expr simpleQE(Expr exp, Range& quantified)
   {
     ExprFactory& efac = exp->getFactory();
-    ExprSet cnjsSet;
+    ExprSet cnjsSet, dsjsSet;
+    getDisj(exp, dsjsSet);
+    if (dsjsSet.size() > 1)
+    {
+      ExprSet newDsjs;
+      for (auto & d : dsjsSet) newDsjs.insert(simpleQE(d, quantified));
+      return disjoin(newDsjs, efac);
+    }
     getConj(exp, cnjsSet);
     ExprVector cnjs;
     cnjs.insert(cnjs.end(), cnjsSet.begin(), cnjsSet.end());
@@ -4174,10 +4206,8 @@ namespace ufo
     ExprFactory& efac = exp->getFactory();
     if (isOpX<EQ>(exp) && isNumeric(exp->left()) && !containsOp<MOD>(exp))
     {
-      lits.insert(exp); // this maybe crucial for implcheck
-
-//      getLiterals(mk<GEQ>(exp->left(), exp->right()), lits);
-//      getLiterals(mk<LEQ>(exp->left(), exp->right()), lits);
+      getLiterals(mk<GEQ>(exp->left(), exp->right()), lits);
+      getLiterals(mk<LEQ>(exp->left(), exp->right()), lits);
     }
     else if (isOpX<NEQ>(exp) && isNumeric(exp->left()) && !containsOp<MOD>(exp))
     {
