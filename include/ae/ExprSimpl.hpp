@@ -749,6 +749,10 @@ namespace ufo
         disjoin(args, fla->getFactory()) :
         conjoin (args, fla->getFactory());
     }
+    else if (isOpX<XOR>(fla) && fla->arity() == 2)
+    {
+      return mk<EQ>(fla->arg(0), fla->arg(1));
+    }
     else if (isOp<ComparissonOp>(fla))
     {
       return reBuildNegCmp(fla, fla->arg(0), fla->arg(1));
@@ -4214,7 +4218,7 @@ namespace ufo
       getLiterals(mk<GT>(exp->left(), exp->right()), lits);
       getLiterals(mk<LT>(exp->left(), exp->right()), lits);
     }
-    else if ((isOpX<EQ>(exp) || isOpX<NEQ>(exp)) && isBoolean(exp->left()))
+    else if ((isOpX<EQ>(exp) || isOpX<NEQ>(exp) || isOpX<XOR>(exp)) && isBoolean(exp->left()))
     {
       getLiterals(exp->left(), lits);
       getLiterals(exp->right(), lits);

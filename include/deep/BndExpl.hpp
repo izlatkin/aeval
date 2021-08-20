@@ -40,6 +40,7 @@ namespace ufo
 
     map<int, KeyTG*> mKeys;
     map<int, ExprVector> kVers;
+    vector<map<int, ExprVector> > kVersVals;
 
     public:
 
@@ -341,21 +342,19 @@ namespace ufo
             {
               if (hr.dstRelation == ruleManager.failDecl || skipTerm)
               {
-                printTest();
-                outs () << "\n    visited: ";
+//                outs () << "\n    visited: ";
                 for ( auto & b : apps)
                 {
                   toErCHCs.insert(b);
-                  outs () << b << ", ";
+//                  outs () << b << ", ";
                 }
-                outs () << "\b\n      SAT trace: true ";
-                for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
-                outs () << "\n       Model:\n";
-                for (auto k : kVers)
-                {
-                  outs () << "     ~ ~ for " << k.first << ": " << u.getModel(k.second) << "\n";
-                }
+//                outs () << "\b\n      SAT trace: true ";
+//                for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
+//                outs () << "\n       Model:\n";
+
                 suffFound = true;
+                if (getTest())
+                  printTest();
               }
               // default
             }
@@ -373,21 +372,18 @@ namespace ufo
                 kVers.clear();
                 if (bool(u.isSat(toExpr(tr))))
                 {
-                  printTest();
-                  outs () << "\n    visited: ";
+//                  outs () << "\n    visited: ";
                   for ( auto & b : apps)
                   {
                     toErCHCs.insert(b);
-                    outs () << b << ", ";
+//                    outs () << b << ", ";
                   }
-                  outs () << "\b\n      SAT trace: true ";
-                  for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
-                  outs () << "\n       Model:\n";
-                  for (auto k : kVers)
-                  {
-                    outs () << "     ~ ~ for " << k.first << ": " << u.getModel(k.second) << "\n";
-                  }
+//                  outs () << "\b\n      SAT trace: true ";
+//                  for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
+//                  outs () << "\n       Model:\n";
                   suffFound = true;
+                  if (getTest())
+                    printTest();
                   break;
                 }
               }
@@ -953,30 +949,51 @@ namespace ufo
       return true;
     }
 
-    int testNum = 0;
+    bool getTest()
+    {
+      map<int, ExprVector> tmp;
+      for (auto k : kVers)
+        for (auto & a : k.second)
+        {
+          Expr val = u.getModel(a);
+          if (val == a) val = mkMPZ(0, m_efac);
+            tmp[k.first].push_back(val);
+        }
+
+      if (find(kVersVals.begin(), kVersVals.end(), tmp) == kVersVals.end())
+      {
+        kVersVals.push_back(tmp);
+        return true;
+      }
+      return false;
+    }
+
     void printTest()
     {
       ofstream testfile;
-      testfile.open ("testgen_" + lexical_cast<string>(testNum) + ".h");
+      testfile.open ("testgen_" + lexical_cast<string>(kVersVals.size() - 1) + ".h");
       testfile << "#include <stdlib.h>\n";
-      for (auto k : kVers)
+
+      for (auto k : mKeys)
       {
         testfile << "int cnt_" << k.first << " = 0;\n";
-        testfile << "int tot_" << k.first << " = " << k.second.size() << ";\n";
+        testfile << "int tot_" << k.first << " = " << kVers[k.first].size() << ";\n";
       }
       testfile << "\n";
-      for (auto k : kVers)
+      for (auto k : mKeys)
       {
         testfile << "static const int inp_" << k.first << "[] = {";
-        for (int v = 0; v < k.second.size(); v++)
+        auto& l = kVersVals.back()[k.first];
+
+        for (int v = 0; v < l.size(); v++)
         {
-          testfile << u.getModel(k.second[v]);
-          if (v < k.second.size() - 1) testfile << ", ";
+          testfile << l[v];
+          if (v < l.size() - 1) testfile << ", ";
         }
         testfile << "};\n";
       }
       testfile << "\n";
-      for (auto k : kVers)
+      for (auto k : mKeys)
       {
         testfile << "const int nondet_" << k.first << "(){\n";
         testfile << "  if (cnt_" << k.first << " < tot_" << k.first << ")\n";
@@ -985,7 +1002,6 @@ namespace ufo
         testfile << "}\n\n";
       }
       testfile.close();
-      testNum++;
     }
   };
 

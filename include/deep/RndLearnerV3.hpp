@@ -1659,7 +1659,7 @@ namespace ufo
       
       BndExpl bnd1(ruleManager1, false);
       ds.getInvs(bnd1.getInvs());
-      bnd1.exploreTracesTG(nums, 1, 20, toSkip);
+      bnd1.exploreTracesTG(nums, 1, 100000, toSkip);
     }
   }
 
