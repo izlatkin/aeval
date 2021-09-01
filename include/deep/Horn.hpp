@@ -45,19 +45,26 @@ namespace ufo
     bool isInductive;
 
     void assignVarsAndRewrite (ExprVector& _srcVars, ExprVector& invVarsSrc,
-                               ExprVector& _dstVars, ExprVector& invVarsDst)
+                               ExprVector& _dstVars, ExprVector& invVarsDst, ExprSet& lin)
     {
       for (int i = 0; i < _srcVars.size(); i++)
       {
         srcVars.push_back(invVarsSrc[i]);
-        body = mk<AND>(body, mk<EQ>(_srcVars[i], srcVars[i]));
+        lin.insert(mk<EQ>(_srcVars[i], srcVars[i]));
       }
 
       for (int i = 0; i < _dstVars.size(); i++)
       {
         dstVars.push_back(invVarsDst[i]);
-        body = mk<AND>(body, mk<EQ>(_dstVars[i], dstVars[i]));
+        lin.insert(mk<EQ>(_dstVars[i], dstVars[i]));
       }
+    }
+
+    void shrinkLocVars()
+    {
+      for (auto it = locVars.begin(); it != locVars.end();)
+        if (contains(body, *it)) ++it;
+        else it = locVars.erase(it);
     }
   };
 
@@ -86,8 +93,10 @@ namespace ufo
     map<Expr, bool> hasArrays;
     map<Expr, vector<int>> iterators;
     bool hasAnyArrays;
+    int debug;
 
-    CHCs(ExprFactory &efac, EZ3 &z3) : u(efac), m_efac(efac), m_z3(z3), hasAnyArrays(false) {};
+    CHCs(ExprFactory &efac, EZ3 &z3, int d = false) :
+      u(efac), m_efac(efac), m_z3(z3), hasAnyArrays(false), debug(d) {};
 
     bool isFapp (Expr e)
     {
@@ -101,7 +110,7 @@ namespace ufo
 
     void splitBody (Expr body, ExprVector& srcVars, Expr &srcRelation, ExprSet& lin)
     {
-      getConj (body, lin);
+      getConj (simplifyBool(body), lin);
       for (auto c = lin.begin(); c != lin.end(); )
       {
         Expr cnj = *c;
@@ -177,11 +186,11 @@ namespace ufo
       {
         r = mk<IMPL>(r->first(), mk<FALSE>(m_efac));
       }
-      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->left()))
+      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->left()) && hasUninterp(r->left()))
       {
         r = mk<IMPL>(r->left()->left(), r->right());
       }
-      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->right()))
+      else if (isOpX<OR>(r) && r->arity() == 2 && isOpX<NEG>(r->right()) && hasUninterp(r->right()))
       {
         r = mk<IMPL>(r->right()->left(), r->left());
       }
@@ -200,8 +209,9 @@ namespace ufo
       return true;
     }
 
-    void parse(string smt, bool doElim = true)
+    void parse(string smt, bool doElim = true, bool doArithm = true)
     {
+      if (debug > 0) outs () << "\nPARSING" << "\n=======\n";
       std::unique_ptr<ufo::ZFixedPoint <EZ3> > m_fp;
       m_fp.reset (new ZFixedPoint<EZ3> (m_z3));
       ZFixedPoint<EZ3> &fp = *m_fp;
@@ -240,6 +250,8 @@ namespace ufo
         }
       }
 
+      if (debug > 0) outs () << "Reserved space for " << chcs.size() << " CHCs and " << decls.size() << " declarations\n";
+
       // the second loop is needed because we want to distunguish
       // uninterpreted functions used as variables from relations to be synthesized
       for (auto & hr : chcs)
@@ -262,7 +274,6 @@ namespace ufo
         hr.isQuery = (hr.dstRelation == failDecl);
         hr.isInductive = (hr.srcRelation == hr.dstRelation);
 
-        ExprVector allOrigSymbs = origSrcSymbs;
         ExprVector origDstSymbs;
         if (!hr.isQuery)
         {
@@ -271,113 +282,165 @@ namespace ufo
           hr.head = hr.head->left();
         }
 
-        allOrigSymbs.insert(allOrigSymbs.end(), origDstSymbs.begin(), origDstSymbs.end());
-        simplBoolReplCnj(allOrigSymbs, lin);
-        hr.body = conjoin(lin, m_efac);
-
         hr.assignVarsAndRewrite (origSrcSymbs, invVars[hr.srcRelation],
-                                 origDstSymbs, invVarsPrime[hr.dstRelation]);
+                                 origDstSymbs, invVarsPrime[hr.dstRelation], lin);
+
         if (doElim)
         {
-          if (qeUnsupported(hr.body))
-            hr.body = simpleQE(hr.body, hr.locVars);
-          else
-            hr.body = eliminateQuantifiers(hr.body, hr.locVars);
+          hr.body = eliminateQuantifiers(conjoin(lin, m_efac), hr.locVars, doArithm);
+          hr.body = u.removeITE(hr.body);
+          hr.shrinkLocVars();
         }
-
-        hr.body = u.removeITE(hr.body);
+        else
+          hr.body = conjoin(lin, m_efac);
       }
-      if (doElim) eliminateDecls();
-      else splitCHCs();
+
+      if (doElim)
+      {
+        for (auto c = chcs.begin(); c != chcs.end(); ++c)
+        {
+          chcsToCheck1.insert(&(*c));
+          chcsToCheck2.insert(&(*c));
+        }
+        eliminateDecls();
+      }
 
       for (int i = 0; i < chcs.size(); i++)
         outgs[chcs[i].srcRelation].push_back(i);
 
-      for (auto & d : decls){
-        outs () << "outgs from " << *d->left() << ":\n";
-        for (auto & o : outgs[d->left()])
-        {
-          outs () << "     (" << o << ")  -> " << *chcs[o].dstRelation << "\n";
-//          outs () << "       " << *simplifyBool(chcs[o].body) << "\n";
-        }
+      if (doElim) wtoSort();
+
+      if (debug >= 2)
+        for (auto & d : decls){
+          outs () << "outgs from " << *d->left() << ":\n";
+          for (auto & o : outgs[d->left()])
+            outs () << "     (" << o << ")  -> " << *chcs[o].dstRelation << "\n"; }
+
+      if (debug >= 2)
+      {
+        outs () << (doElim ? "  Simplified " : "  Parsed ") << "CHCs:\n";
+        print(debug >= 3);
       }
-      // sort rules
-      wtoSort();
     }
 
     void eliminateVacuous()
     {
+      return; // disabled for testgen
+
       set<int> toErase;
       for (auto c = chcs.begin(); c != chcs.end(); ++c)
       {
-        if (c->isQuery && u.isTrue(c->body) && !c->isFact)
+        if (c->isQuery && !c->isFact &&
+            find(chcsToCheck1.begin(), chcsToCheck1.end(), &(*c)) != chcsToCheck1.end())
         {
-          // thus, c->srcRelation should be false
-          for (int i = 0; i < chcs.size(); i++)
+          if (u.isTrue(c->body))
           {
-            HornRuleExt* s = &chcs[i];
-            if (s->srcRelation == c->srcRelation)
+            // thus, c->srcRelation should be false
+            for (int i = 0; i < chcs.size(); i++)
             {
-              toErase.insert(i);  // could erase here, but ther will be a mess with pointers
+              HornRuleExt* s = &chcs[i];
+              if (s->srcRelation == c->srcRelation)
+              {
+                // search for the cases where s == inv -> inv2   and   c == inv /\ true -> false
+                // then, inv can only be false, thus s does not give any constraint
+                toErase.insert(i);  // could erase here, but ther will be a mess with pointers
+              }
+              else if (s->dstRelation == c->srcRelation)
+              {
+                s->isQuery = true;
+                s->dstRelation = failDecl;
+                s->locVars.insert(s->locVars.end(), s->dstVars.begin(), s->dstVars.end());
+                s->dstVars.clear();
+                chcsToCheck1.insert(s);
+                chcsToCheck2.insert(s);
+              }
             }
-            else if (s->dstRelation == c->srcRelation)
-            {
-              s->isQuery = true;
-              s->dstRelation = failDecl;
-              s->locVars.insert(s->locVars.end(), s->dstVars.begin(), s->dstVars.end());
-              s->dstVars.clear();
-            }
+            decls.erase(c->srcRelation);
           }
-          decls.erase(c->srcRelation);
+          chcsToCheck1.erase(&(*c));
         }
       }
 
       if (toErase.empty()) return;
 
       for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
+      {
+        if (debug >= 2) outs () << "  Eliminating vacuous CHC: " << chcs[*it].srcRelation << " -> " << chcs[*it].dstRelation << "\n";
+        if (debug >= 3) outs () << "    its body is true: " << chcs[*it].body << "\n";
         chcs.erase(chcs.begin() + *it);
+      }
 
       eliminateVacuous();     // recursive call
     }
 
     void eliminateDecls()
     {
+      if (debug > 0) outs () << "Reducing the number of CHCs: " << chcs.size() << "; and the number of declarations: " << decls.size() << "...\n";
+      if (debug >= 3)
+      {
+        outs () << "  Current CHC topology:\n";
+        print(false);
+      }
       int preElim = chcs.size();
 
       eliminateVacuous();         // first, remove relations which are trivially false
 
+      Expr declToRemove = NULL;
+      vector<int> srcMax, dstMax;
+      set<int> to_erase;
+
       for (auto d = decls.begin(); d != decls.end();)
       {
         vector<int> src, dst;
-
         for (int i = 0; i < chcs.size(); i++)
+        {
           if (chcs[i].srcRelation == (*d)->left()) src.push_back(i);
-
-        for (int i = 0; i < chcs.size(); i++)
           if (chcs[i].dstRelation == (*d)->left()) dst.push_back(i);
-
-        if (src.size() == 1 && dst.size() > 0 && emptyIntersect(src, dst))
-        {
-          // a predicate is used only as an intermediate node
-          // TODO: consider merging also if src.size() > 0
-          for (int i : src)
-            for (int j : dst)
-              mergeCHCs(&chcs[i], &chcs[j]);
-          set<int> to_erase;
-          to_erase.insert(src.begin(), src.end());
-          to_erase.insert(dst.begin(), dst.end());
-          for (auto a = to_erase.rbegin(); a != to_erase.rend(); ++a)
-            chcs.erase(chcs.begin()+*a);
-          d = decls.erase(d);
         }
-        else if (src.size() == 0)
+
+        // a predicate is used only as an intermediate node
+        // TODO: consider merging also if dst() > 0
+
+        if (((src.size() == 1 && dst.size() > 0) ||
+             (src.size() > 0 && dst.size() == 1)) &&
+            emptyIntersect(src, dst))
         {
-          // remove dangling CHCs
-          for (int i = dst.size()-1; i >= 0; i--)
-            chcs.erase(chcs.begin()+dst[i]);
+          if (declToRemove != NULL)
+            if (declToRemove->arity() > (*d)->arity())
+              { ++d; continue; }
+          if (declToRemove != NULL)
+            if (declToRemove->arity() == (*d)->arity() &&
+                src.size() * dst.size() > srcMax.size() * dstMax.size())
+              { ++d; continue; }
+
+          srcMax = src;
+          dstMax = dst;
+          declToRemove = *d;
+        }
+        if (src.size() == 0) // found dangling CHCs
+        {
+          to_erase.insert(dst.begin(), dst.end());
           d = decls.erase(d);
         }
         else ++d;
+      }
+
+      // first, it will remove dangling CHCs since it's cheaper
+      if (declToRemove != NULL && to_erase.empty())
+      {
+        for (int i : srcMax)
+          for (int j : dstMax)
+            mergeCHCs(&chcs[i], &chcs[j]);
+
+        to_erase.insert(srcMax.begin(), srcMax.end());
+        to_erase.insert(dstMax.begin(), dstMax.end());
+        decls.erase(declToRemove);
+      }
+
+      for (auto a = to_erase.rbegin(); a != to_erase.rend(); ++a)
+      {
+        if (debug >= 2) outs () << "  Eliminating CHC: " << chcs[*a].srcRelation << " -> " << chcs[*a].dstRelation << "\n";
+        chcs.erase(chcs.begin()+*a);
       }
 
       removeTautologies();            // get rid of CHCs that don't add any _new_ constraints
@@ -385,7 +448,8 @@ namespace ufo
         eliminateDecls();
       else
       {
-        if (!hasAnyArrays) slice();   // remove unrelated constraints and shrink arities of predicates
+        // disabled, currently. to revise
+//        if (!hasAnyArrays) slice();   // remove unrelated constraints and shrink arities of predicates
 
         int preComb = chcs.size();
         combineCHCs();
@@ -394,8 +458,17 @@ namespace ufo
       }
     }
 
+    set<HornRuleExt*> chcsToCheck1, chcsToCheck2;
+    int glob_ind = 0;
+
     void mergeCHCs(HornRuleExt* s, HornRuleExt* d)
     {
+      if (debug >= 2)
+      {
+        outs () << "  Concatenating two CHCs: "
+                << d->srcRelation << " -> " << d->dstRelation << " and "
+                << s->srcRelation << " -> " << s->dstRelation << "\n";
+      }
       HornRuleExt* n = new HornRuleExt();
       n->srcRelation = d->srcRelation;
       n->dstRelation = s->dstRelation;
@@ -405,7 +478,7 @@ namespace ufo
       ExprVector newVars;
       for (int i = 0; i < d->dstVars.size(); i++)
       {
-        Expr new_name = mkTerm<string> ("__bnd_var_" + to_string(i), m_efac);
+        Expr new_name = mkTerm<string> ("__bnd_var_" + to_string(glob_ind++), m_efac);
         newVars.push_back(cloneVar(d->dstVars[i], new_name));
       }
 
@@ -413,35 +486,38 @@ namespace ufo
       n->dstVars.insert(n->dstVars.end(), d->locVars.begin(), d->locVars.end());
       for (int i = 0; i < d->locVars.size(); i++)
       {
-        Expr new_name = mkTerm<string> ("__loc_var_" + to_string(i), m_efac);
+        Expr new_name = mkTerm<string> ("__loc_var_" + to_string(glob_ind++), m_efac);
         newVars.push_back(cloneVar(d->locVars[i], new_name));
       }
       mergedBody = mk<AND>(replaceAll(d->body, n->dstVars, newVars), mergedBody);
       n->locVars = newVars;
       n->locVars.insert(n->locVars.end(), s->locVars.begin(), s->locVars.end());
-
-      if (!qeUnsupported(mergedBody))
-      {
-        mergedBody = eliminateQuantifiers(mergedBody, n->locVars);
-        n->locVars.clear();
-      }
-
-      n->body = mergedBody;
+      n->body = simpleQE(mergedBody, n->locVars);
+      n->shrinkLocVars();
       n->dstVars = s->dstVars;
       n->isInductive = n->srcRelation == n->dstRelation;
       n->isFact = isOpX<TRUE>(n->srcRelation);
       n->isQuery = n->dstRelation == failDecl;
+
       chcs.push_back(*n);
+      chcsToCheck1.insert(n);
+      chcsToCheck2.insert(n);
     }
 
     void removeTautologies()
     {
       for (auto h = chcs.begin(); h != chcs.end(); )
       {
-        if (u.isFalse(h->body))
+        if (find(chcsToCheck2.begin(), chcsToCheck2.end(), &(*h)) != chcsToCheck2.end())
         {
-          h = chcs.erase(h);
-          continue;
+          if (u.isFalse(h->body))
+          {
+            if (debug >= 2) outs () << "  Eliminating CHC: " << h->srcRelation << " -> " << h->dstRelation << "\n";
+            if (debug >= 3) outs () << "    its body is false: " << h->body << "\n";
+            h = chcs.erase(h);
+            continue;
+          }
+          chcsToCheck2.erase(&(*h));
         }
 
         bool found = false;
@@ -457,31 +533,51 @@ namespace ufo
             }
           }
         }
-        if (found) h = chcs.erase(h);
-          else ++h;
+        if (found)
+        {
+          h = chcs.erase(h);
+          if (debug >= 2) outs () << "  Eliminating CHC: " << h->srcRelation << " -> " << h->dstRelation << "\n";
+          if (debug >= 3) outs () << "    its body is ???: " << h->body << "\n";
+        }
+        else ++h;
       }
     }
 
     void combineCHCs()
     {
       for (int i = 0; i < chcs.size(); i++)
+      {
+        set<int> toComb = {i};
+        HornRuleExt& s = chcs[i];
         for (int j = i + 1; j < chcs.size(); j++)
         {
-          HornRuleExt& s = chcs[i];
           HornRuleExt& d = chcs[j];
           if (s.srcRelation == d.srcRelation && s.dstRelation == d.dstRelation)
           {
             for (int k = 0; k < s.srcVars.size(); k++) assert (s.srcVars[k] == d.srcVars[k]);
             for (int k = 0; k < s.dstVars.size(); k++) assert (s.dstVars[k] == d.dstVars[k]);
-
-            // small optim:
-            Expr tmp = distribDisjoin(s.body, d.body);
-
-            s.body = tmp;
-            chcs.erase(chcs.begin()+j);
-            return combineCHCs();
+            toComb.insert(j);
           }
         }
+        if (toComb.size() > 1)
+        {
+          if (debug >= 2)
+          {
+            outs () << "    Disjoing bodies of " << toComb.size() << " CHCs: "
+                    << s.srcRelation << " -> " << s.dstRelation << "\n";
+          }
+          ExprVector all;
+          for (auto it = toComb.rbegin(); it != toComb.rend(); ++it)
+          {
+            all.push_back(chcs[*it].body);
+            if (*it != i) chcs.erase(chcs.begin() + *it);
+          }
+          s.body = distribDisjoin(all, m_efac);
+          chcsToCheck1.insert(&s);
+          chcsToCheck2.insert(&s);
+          return combineCHCs();
+        }
+      }
     }
 
     // (recursive) multi-stage slicing begins here
@@ -508,7 +604,7 @@ namespace ufo
         {
           chcs[i].body = keepQuantifiers(chcs[i].body, chcs[i].srcVars);
           Expr decl = chcs[i].srcRelation;
-          expr::filter (chcs[i].body, bind::IsConst(),
+          filter (chcs[i].body, bind::IsConst(),
             std::inserter (varsSlice[decl], varsSlice[decl].begin ()));
           updateTodo(chcs[i].srcRelation, i);
         }
@@ -567,7 +663,7 @@ namespace ufo
       else
       {
         varDeps = varsSlice[hr->srcRelation];
-        expr::filter (getPrecondition(hr), bind::IsConst(),     // all src vars from the preconditions are dependent
+        filter (getPrecondition(hr), bind::IsConst(),     // all src vars from the preconditions are dependent
                       std::inserter (varDeps, varDeps.begin ()));
 
         for (auto & v : varsSlice[hr->dstRelation])
@@ -583,7 +679,7 @@ namespace ufo
           for (auto & c : cnjs)
           {
             ExprSet varsCnj;
-            expr::filter (c, bind::IsConst(),
+            filter (c, bind::IsConst(),
                           std::inserter (varsCnj, varsCnj.begin ()));
             if (!emptyIntersect(varDeps, varsCnj))
               varDeps.insert(varsCnj.begin(), varsCnj.end());
@@ -649,45 +745,6 @@ namespace ufo
       if (updateSrc) updateTodo(hr->srcRelation, num);
       if (updateDst) updateTodo(hr->dstRelation, num);
       chcsToVisit.erase(num);
-    }
-
-    void splitCHCs()
-    {
-      for (int i = 0; i < chcs.size(); )
-      {
-        auto & hr = chcs [i];
-        Expr body = hr.body;
-        // naive ITE-splits
-        ExprVector ites;
-        getITEs(body, ites);
-        if (ites.empty()) { i++; continue; }
-
-        Expr it = *ites.begin();
-        Expr lb = mk<AND>(it->left(), replaceAll(body, it, it->right()));
-        Expr rb = mk<AND>(mkNeg(it->left()), replaceAll(body, it, it->last()));
-        if ((bool)u.isFalse(lb)) body = rb;
-        else if ((bool)u.isFalse(rb)) body = lb;
-        else body = mk<OR>(lb, rb);
-        ExprSet dsjs;
-        getDisj(body, dsjs);
-//        outs () << "      SANITY: " << (bool)u.isEquiv(hr.body, body) << "\n";
-        bool first = true;
-        for (auto & d : dsjs)
-        {
-          if (first)
-          {
-            hr.body = d;
-            first = false;
-          }
-          else
-          {
-            auto hrNew = hr;     // copy orig
-            hrNew.body = d;
-            chcs.push_back(hrNew);
-          }
-        }
-      }
-//      outs () << "upd decls size = " << chcs.size() << "\n";
     }
 
     bool hasCycles()
@@ -839,26 +896,9 @@ namespace ufo
 
     Expr getPrecondition (HornRuleExt* hr)
     {
-      return
-        eliminateQuantifiers(
-          eliminateQuantifiers(hr->body, hr->locVars), hr->dstVars);
-//      ExprSet cnjs;
-//      ExprSet newCnjs;
-//      getConj(simpleQE(hr->body, hr->dstVars), cnjs);
-//      for (auto &a : cnjs)
-//        if (emptyIntersect(a, hr->dstVars) && emptyIntersect(a, hr->locVars))
-//          newCnjs.insert(a);
-//
-//      return conjoin(newCnjs, m_efac);
+      Expr tmp = keepQuantifiers(hr->body, hr->srcVars);
+      return weakenForHardVars(tmp, hr->srcVars);
     }
-
-//    Expr getPrecondition (Expr decl)
-//    {
-//      for (auto &a : chcs)
-//        if (a.srcRelation == decl->left() && a.dstRelation == decl->left())
-//          return getPrecondition(&a);
-//      return mk<TRUE>(m_efac);
-//    }
 
     void wtoSort()
     {
@@ -1053,44 +1093,40 @@ namespace ufo
 
     void print (bool full = false)
     {
-      outs() << "CHCs:\n";
       for (auto &hr: chcs){
-        print (hr, full);
-      }
-    }
+        if (full)
+        {
+          if (hr.isFact) outs() << "  INIT:\n";
+          else if (hr.isInductive) outs() << "  TR:\n";
+          else if (hr.isQuery) outs() << "  BAD:\n";
+          else outs() << "  CHC:\n";
+        }
 
-    void print (HornRuleExt& hr, bool full)
-    {
-      if (full)
-      {
-        if (hr.isFact) outs() << "  INIT:\n";
-        else if (hr.isQuery) outs() << "  BAD:\n";
-        else outs() << "  CHC:\n";
-      }
+        outs () << "    " << * hr.srcRelation;
+        if (full && hr.srcVars.size() > 0)
+        {
+          outs () << " (";
+          pprint(hr.srcVars);
+          outs () << "\b\b)";
+        }
+        else outs () << "[#" << hr.srcVars.size() << "]";
+        outs () << " -> " << * hr.dstRelation;
 
-      outs () << "    " << * hr.srcRelation;
-      if (full && hr.srcVars.size() > 0)
-      {
-        outs () << " (";
-        for(auto &a: hr.srcVars) outs() << *a << ", ";
-        outs () << "\b\b)";
-      }
-      outs () << " -> " << * hr.dstRelation;
-
-      if (full && hr.dstVars.size() > 0)
-      {
-        outs () << " (";
-        for(auto &a: hr.dstVars) outs() << *a << ", ";
-        outs () << "\b\b)";
-      }
-      if (full) outs() << "\n    body: " << * hr.body << "\n";
-      else outs() << "\n";
-
-      if (full && hr.locVars.size() > 0)
-      {
-        outs () << "    loc vars: ";
-        for(auto &a: hr.locVars) outs() << *a << ", ";
-        outs () << "\n\n";
+        if (full && hr.dstVars.size() > 0)
+        {
+          outs () << " (";
+          pprint(hr.dstVars);
+          outs () << "\b\b)";
+        }
+        else outs () << "[#" << hr.dstVars.size() << "]";
+        if (full)
+        {
+          outs() << "\n    body: \n";
+          if (treeSize(hr.body) < 1000)
+            pprint(hr.body, 4);
+          else outs () << " < . . . . too large . . . . >\n";
+        }
+        else outs() << "\n";
       }
     }
   };

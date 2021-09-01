@@ -51,7 +51,7 @@ namespace ufo
       m_efac(r.m_efac), ruleManager(r), u(m_efac), extraLemmas(lms), debug(d) {}
 
     map<Expr, ExprSet> concrInvs;
-    ExprMap& getInvs (){ return invs; }
+    void setInvs(ExprMap& i) {invs = i;}
 
     void guessRandomTrace(vector<int>& trace)
     {
@@ -192,13 +192,12 @@ namespace ufo
 
           for (auto & a : mKeys)
           {
-            auto f = find(a.second->rule.begin(), a.second->rule.end(), &hr);
-            if (f != a.second->rule.end())
+            for (int num = 0; num < a.second->rule.size(); num++)
             {
-              auto l = find(a.second->locPos.begin(), a.second->locPos.end(), i);
-              if (l != a.second->locPos.end())
+              if (a.second->rule[num] == &hr)
               {
-                kVers[a.first].push_back(var);
+                if (a.second->locPos[num] == i)
+                  kVers[a.first].push_back(var);
               }
             }
           }
@@ -957,7 +956,8 @@ namespace ufo
         {
           Expr val = u.getModel(a);
           if (val == a) val = mkMPZ(0, m_efac);
-            tmp[k.first].push_back(val);
+          assert (isNumeric(val));
+          tmp[k.first].push_back(val);
         }
 
       if (find(kVersVals.begin(), kVersVals.end(), tmp) == kVersVals.end())
@@ -987,7 +987,9 @@ namespace ufo
 
         for (int v = 0; v < l.size(); v++)
         {
-          testfile << l[v];
+          if (isOpX<TRUE>(l[v])) testfile << "1";
+          else  if (isOpX<FALSE>(l[v])) testfile << "0";
+          else testfile << l[v];
           if (v < l.size() - 1) testfile << ", ";
         }
         testfile << "};\n";

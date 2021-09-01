@@ -113,15 +113,14 @@ namespace ufo
     Expr eliminateQuantifiers(Expr e, ExprVector& varsRenameFrom, int invNum, bool bwd)
     {
       Expr eTmp = keepQuantifiersRepl(e, varsRenameFrom);
+      eTmp = weakenForHardVars(eTmp, varsRenameFrom);
       if (bwd) eTmp = mkNeg(eTmp);
       eTmp = simplifyBool(/*simplifyArithm*/(eTmp /*, false, true*/));
       eTmp = unfoldITE(eTmp);
       eTmp = renameCand(eTmp, varsRenameFrom, invNum);
       if (printLog >= 4)
       {
-        outs () << "  QE: " << e << "\n  vars   (((";
-        for (auto & v : varsRenameFrom ) outs () << "   " << v << " ";
-        outs () << ")))\n";
+        outs () << "  QE: " << e << "\n  vars   ((("; pprint(varsRenameFrom); outs () << ")))\n";
         outs () << "  QE res: " << eTmp << "\n";
       }
       return eTmp;
@@ -639,7 +638,6 @@ namespace ufo
         if (lastModel == NULL) break;
         Expr mbp = getMbp(invNum, lastModel);
         if (isOpX<FALSE>(mbp)) break;
-        mbp = ufo::eliminateQuantifiers(mbp, dstVars); // for the case of arrays
         mbp = u.getImplDecomp(mbp, invs);
         mbp = u.getWeakerMBP(mbp, fla, srcVars);
         if (printLog >= 2) outs() << "    Found MBP: " << mbp << "\n";
@@ -924,7 +922,6 @@ namespace ufo
       if (printLog >= 3) outs () << "MultiHoudini\n";
       if (printLog >= 4) printCands();
 
-      if (!anyProgress(worklist)) return false;
       bool res1 = true;
       for (auto &hr: worklist)
       {
@@ -992,27 +989,36 @@ namespace ufo
       return true;
     }
 
-    void generateMbps(int invNum, Expr ssa, ExprVector& srcVars, ExprVector& dstVars)
+    void generateMbps(int invNum, Expr ssa, ExprVector& srcVars, ExprVector& dstVars, ExprSet& cands)
     {
-      ExprVector vars2keep;
+      ExprVector vars2keep, prjcts1, prjcts2;
+      bool hasArray = false;
       for (int i = 0; i < srcVars.size(); i++)
         if (containsOp<ARRAY_TY>(srcVars[i]))
+        {
+          hasArray = true;
           vars2keep.push_back(dstVars[i]);
+        }
         else
           vars2keep.push_back(srcVars[i]);
 
-      ExprSet tmp = {ssa};
-      while (true)
+//      if (mbpEqs != 0)
+        u.flatten(ssa, prjcts1, false, vars2keep, keepQuantifiersRepl);
+//      if (mbpEqs != 1)
+//        u.flatten(ssa, prjcts2, true, vars2keep, keepQuantifiersRepl);
+
+//      prjcts1.insert(prjcts1.end(), prjcts2.begin(), prjcts2.end());
+      for (auto p : prjcts1)
       {
-        if (!u.isSat(tmp)) break;
-        Expr mbp = keepQuantifiersRepl (u.getTrueLiterals(ssa), vars2keep);
-        mbps[invNum].insert(mbp);
-        tmp.insert(mk<NEG>(mbp));
-      }
-      if (printLog >= 2 && !mbps[invNum].empty())
-      {
-        outs() << "Generated MBPs:\n";
-        for (auto & mbp : mbps[invNum]) outs() << "  " << mbp << "\n";
+        getConj(hasArray ? replaceAll(p, dstVars, srcVars) : p, cands);
+        if (hasArray)
+        {
+          p = ufo::eliminateQuantifiers(p, dstVars); // for the case of arrays
+          p = weakenForVars(p, dstVars);
+        }
+        p = simplifyArithm(p);
+        mbps[invNum].insert(p);
+        if (printLog >= 2) outs() << "Generated MBP: " << p << "\n";
       }
     }
 
@@ -1029,25 +1035,20 @@ namespace ufo
     {
       int invNum = getVarIndex(invRel, decls);
 
-      Expr ssa = rewriteSelectStore(ssas[invNum]);
       ExprVector& srcVars = ruleManager.invVars[invRel];
       ExprVector& dstVars = ruleManager.invVarsPrime[invRel];
 
-      retrieveDeltas(ssa, srcVars, dstVars, cands);
-      generateMbps(invNum, ssa, srcVars, dstVars);     // add mbps as candidates:
-      for (auto & mbp : mbps[invNum]) getConj(replaceAll(mbp, dstVars, srcVars), cands);
-
+      Expr ssa = ssas[invNum];
+      if (ssa != NULL)
+      {
+        ssa = rewriteSelectStore(ssa);
+        retrieveDeltas(ssa, srcVars, dstVars, cands);
+        generateMbps(invNum, ssa, srcVars, dstVars, cands);     // collect and add mbps as candidates
+      }
       SamplFactory& sf = sfs[invNum].back();
-      ExprSet candsFromCode;
-      bool analyzedExtras = false;
-      bool isFalse = false;
-      bool hasArrays = false;
+      ExprSet candsFromCode, tmpArrAccess, tmpArrSelects, tmpArrCands, tmpArrFuns;
+      bool analyzedExtras, isFalse, hasArrays = false;
 
-      // for Arrays
-      ExprSet tmpArrAccess;
-      ExprSet tmpArrSelects;
-      ExprSet tmpArrCands;
-      ExprSet tmpArrFuns;
       for (auto &hr : ruleManager.chcs)
       {
         if (hr.dstRelation != invRel && hr.srcRelation != invRel) continue;
@@ -1483,34 +1484,41 @@ namespace ufo
 
     tribool checkCHC (HornRuleExt& hr, map<int, ExprVector>& annotations, bool checkAll = false)
     {
-      if (checkAll && !hr.isQuery && annotations[getVarIndex(hr.dstRelation, decls)].empty())
-        return false;     // shortcut
+      int srcNum = getVarIndex(hr.srcRelation, decls);
+      int dstNum = getVarIndex(hr.dstRelation, decls);
+
+      if (!hr.isQuery)       // shortcuts
+      {
+        if (dstNum < 0)
+        {
+          if (printLog >= 3) outs () << "      Trivially true since " << hr.dstRelation << " is not initialized\n";
+          return false;
+        }
+        if (checkAll && annotations[dstNum].empty())
+          return false;
+      }
 
       ExprSet exprs = {hr.body};
 
       if (!hr.isFact)
       {
-        int invNum = getVarIndex(hr.srcRelation, decls);
-        SamplFactory& sf = sfs[invNum].back();
-        ExprSet lms = sf.learnedExprs;
-        for (auto & a : annotations[invNum]) lms.insert(a);
+        ExprSet lms = sfs[srcNum].back().learnedExprs;
+        for (auto & a : annotations[srcNum]) lms.insert(a);
         for (auto a : lms)
         {
-          for (auto & v : invarVars[invNum]) a = replaceAll(a, v.second, hr.srcVars[v.first]);
+          for (auto & v : invarVars[srcNum]) a = replaceAll(a, v.second, hr.srcVars[v.first]);
           exprs.insert(a);
         }
       }
 
       if (!hr.isQuery)
       {
-        int invNum = getVarIndex(hr.dstRelation, decls);
-        SamplFactory& sf = sfs[invNum].back();
-        ExprSet lms = sf.learnedExprs;
+        ExprSet lms = sfs[dstNum].back().learnedExprs;
         ExprSet negged;
-        for (auto & a : annotations[invNum]) lms.insert(a);
+        for (auto & a : annotations[dstNum]) lms.insert(a);
         for (auto a : lms)
         {
-          for (auto & v : invarVars[invNum]) a = replaceAll(a, v.second, hr.dstVars[v.first]);
+          for (auto & v : invarVars[dstNum]) a = replaceAll(a, v.second, hr.dstVars[v.first]);
           negged.insert(mkNeg(a));
         }
         exprs.insert(disjoin(negged, m_efac));
@@ -1603,66 +1611,72 @@ namespace ufo
         if (c.second.size() > 0)
         {
           outs() << "  Candidates for " << *decls[c.first] << ":\n";
-          for (auto & a : c.second)
-            outs () << "    "  << *a << "\n";
+          pprint(c.second, 4);
         }
     }
   };
 
   inline void testgen(string smt, set<int>& nums, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
                       bool enableDataLearning, bool doElim, bool doDisj, int doProp,
-                      bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp, bool toSkip)
+                      bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp, bool toSkip, int invMode, int debug)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
+    ExprMap invs;
 
-    CHCs ruleManager(m_efac, z3);
-    ruleManager.parse(smt, true);  // used to be doElim
-    BndExpl bnd(ruleManager, false);
-
-    RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, dAllMbp, dAddProp, dAddDat, dStrenMbp, false);
-
-    map<Expr, ExprSet> cands;
-    for (int i = 0; i < ruleManager.cycles.size(); i++)
+    if (invMode > 0)
     {
-      Expr dcl = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
-      if (ds.initializedDecl(dcl)) continue;
-      ds.initializeDecl(dcl);
-      Expr pref = bnd.compactPrefix(i);
-      ExprSet tmp;
-      getConj(pref, tmp);
-      for (auto & t : tmp)
-        if (hasOnlyVars(t, ruleManager.invVars[dcl]))
-          cands[dcl].insert(t);
+      CHCs ruleManager(m_efac, z3, debug);
+      ruleManager.parse(smt, true);  // used to be doElim
+      BndExpl bnd(ruleManager, false);
 
-      ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
-      ds.initializeAux(bnd, i, pref);
+      RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
+
+      map<Expr, ExprSet> cands;
+      for (int i = 0; i < ruleManager.cycles.size(); i++)
+      {
+        Expr dcl = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
+        if (ds.initializedDecl(dcl)) continue;
+        ds.initializeDecl(dcl);
+        if (invMode == 1) continue;
+
+        Expr pref = bnd.compactPrefix(i);
+        ExprSet tmp;
+        getConj(pref, tmp);
+        for (auto & t : tmp)
+          if (hasOnlyVars(t, ruleManager.invVars[dcl]))
+            cands[dcl].insert(t);
+
+        ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
+        ds.initializeAux(bnd, i, pref);
+      }
+
+      if (enableDataLearning) ds.getDataCandidates(cands);
+
+      for (auto & dcl: ruleManager.wtoDecls)
+      {
+        for (int i = 0; i < doProp; i++)
+        for (auto & a : cands[dcl]) ds.propagate(dcl, a, true);
+        ds.addCandidates(dcl, cands[dcl]);
+        ds.prepareSeeds(dcl, cands[dcl]);
+      }
+
+      ds.bootstrap(doDisj);
+      // GF: TODO: some Disj invariants
+      ds.getInvs(invs);
     }
-
-    if (enableDataLearning) ds.getDataCandidates(cands);
-
-    for (auto & dcl: ruleManager.wtoDecls)
-    {
-      for (int i = 0; i < doProp; i++)
-      for (auto & a : cands[dcl]) ds.propagate(dcl, a, true);
-      ds.addCandidates(dcl, cands[dcl]);
-      ds.prepareSeeds(dcl, cands[dcl]);
-    }
-
-    ds.bootstrap(doDisj);
-    // GF: TODO: some Disj invariants
 
     if (nums.size() > 0)
     {
       CHCs ruleManager1(m_efac, z3);
       ruleManager1.parse(smt, false);
-      
       BndExpl bnd1(ruleManager1, false);
-      ds.getInvs(bnd1.getInvs());
+      bnd1.setInvs(invs);
       bnd1.exploreTracesTG(nums, 1, 100000, toSkip);
     }
   }
 
+  // GF: not synchronized with the `rnd` branch (yet)
   inline void learnInvariants3(string smt, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
                                bool enableDataLearning, bool doElim, bool doDisj, int doProp,
                                bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp, int debug)
