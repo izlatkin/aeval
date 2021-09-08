@@ -304,6 +304,29 @@ namespace ufo
         }
         eliminateDecls();
       }
+      else
+      {
+        // actually, add more CHCs
+        int sz = chcs.size();
+        vector<int> toErase;
+        for (int i = 0; i < sz; i++)
+        {
+          ExprVector vars2keep, prjcts1;
+          u.flatten(chcs[i].body, prjcts1, false, vars2keep, [](Expr a, ExprVector& b){return a;});
+          if (prjcts1.size() > 1)
+          {
+            toErase.push_back(i);
+            for (auto & p : prjcts1)
+            {
+              auto n = chcs[i];
+              n.body = p;
+              chcs.push_back(n);
+            }
+          }
+        }
+        for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
+          chcs.erase(chcs.begin() + *it);
+      }
 
       for (int i = 0; i < chcs.size(); i++)
         outgs[chcs[i].srcRelation].push_back(i);
