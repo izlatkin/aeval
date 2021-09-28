@@ -311,6 +311,7 @@ namespace ufo
         vector<int> toErase;
         for (int i = 0; i < sz; i++)
         {
+          if (chcs[i].isQuery) continue;
           ExprVector vars2keep, prjcts1;
           u.flatten(chcs[i].body, prjcts1, false, vars2keep, [](Expr a, ExprVector& b){return a;});
           if (prjcts1.size() > 1)

@@ -263,7 +263,7 @@ namespace ufo
         if (mKeys[(*it).first]->locPos.empty())
         {
           outs() << "Error: key " << (*it).second << " not found\n";
-          exit(1);
+          //exit(1);
         }
       }
 
@@ -277,12 +277,12 @@ namespace ufo
           vector<vector<int>> traces;
           getAllTracesTG(mk<TRUE>(m_efac), a, cur_bnd, vector<int>(), traces);
 
-          outs () << "  exploring traces (" << traces.size() << ") of length " << cur_bnd << ";       todo(";
-          for (auto & b : todoCHCs)
+          outs () << "  exploring traces (" << traces.size() << ") of length " << cur_bnd << ";       # of todos = " << todoCHCs.size() << "\n";
+ /*         for (auto & b : todoCHCs)
           {
             outs () << b << ", ";
           }
-          outs () << "\b\b)\n";
+          outs () << "\b\b)\n";*/
 
           int tot = 0;
           int tot2 = 0;
