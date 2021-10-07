@@ -1623,11 +1623,16 @@ namespace ufo
     ExprFactory m_efac;
     EZ3 z3(m_efac);
     ExprMap invs;
+    CHCs ruleManager(m_efac, z3, debug);
 
-    if (invMode > 0)
+    if (invMode == 0)
     {
-      CHCs ruleManager(m_efac, z3, debug);
-      ruleManager.parse(smt, true);  // used to be doElim
+      ruleManager.parse(smt, 0);
+      ruleManager.reParse();
+    }
+    else
+    {
+      ruleManager.parse(smt, 2);  // used to be doElim
       BndExpl bnd(ruleManager, false);
 
       RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
@@ -1639,7 +1644,6 @@ namespace ufo
         if (ds.initializedDecl(dcl)) continue;
         ds.initializeDecl(dcl);
         if (invMode == 1) continue;
-
         Expr pref = bnd.compactPrefix(i);
         ExprSet tmp;
         getConj(pref, tmp);
@@ -1662,15 +1666,31 @@ namespace ufo
       }
 
       ds.bootstrap(doDisj);
-      // GF: TODO: some Disj invariants
       ds.getInvs(invs);
+
+      ruleManager.propagateInvs(invs);
+      ruleManager.reParse();
+
+      // for sanity check (can be removed):
+      {
+        outs () << "======== Propagating invariants to al CHCs ======\n";
+        RndLearnerV3 dss(m_efac, z3, ruleManager, to, freqs, aggp, 1, dAddProp, dAddDat, dStrenMbp, 0);
+        for (auto& rel: ruleManager.decls)
+        {
+          dss.initializeDecl(rel->left());
+          ExprSet tmp;
+          getConj(invs[rel->left()], tmp);
+          dss.addCandidates(rel->left(), tmp);
+        }
+        dss.bootstrap(doDisj);
+        invs.clear();
+        dss.getInvs(invs);
+      }
     }
 
     if (nums.size() > 0)
     {
-      CHCs ruleManager1(m_efac, z3);
-      ruleManager1.parse(smt, false);
-      BndExpl bnd1(ruleManager1, false);
+      BndExpl bnd1(ruleManager, false);
       bnd1.setInvs(invs);
       bnd1.exploreTracesTG(nums, 1, 100000, toSkip);
     }
