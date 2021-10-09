@@ -104,7 +104,7 @@ int main (int argc, char ** argv)
   bool to_skip = getBoolValue("--no-term", false, argc, argv);
   
   // All other attrs are inherited from FreqHorn:
-  int max_attempts = getIntValue(OPT_MAX_ATTEMPTS, 2000000, argc, argv);
+  int max_attempts = getIntValue(OPT_MAX_ATTEMPTS, 10, argc, argv);
   int to = getIntValue(OPT_TO, 1000, argc, argv);
   bool kinduction = getBoolValue(OPT_K_IND, false, argc, argv);
   bool densecode = getBoolValue(OPT_GET_FREQS, false, argc, argv);

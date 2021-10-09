@@ -423,6 +423,7 @@ namespace ufo
         for (auto a : toErCHCs) todoCHCs.erase(a);
         cur_bnd++;
       }
+      outs () << "Done with TG\n";
     }
 
     bool exploreTraces(int cur_bnd, int bnd, bool print = false)

@@ -42,11 +42,12 @@ namespace ufo
     // extra options for disjunctive invariants
     unsigned dCandNum = 0;
     unsigned dAttNum = 100;
-    unsigned dDepNum = 3;
+    unsigned dDepNum = 2;
     bool dAllMbp;
     bool dAddProp;
     bool dAddDat;
     bool dStrenMbp;
+    int mbpEqs;
 
     map<int, Expr> postconds;
     map<int, Expr> ssas;
@@ -58,10 +59,10 @@ namespace ufo
 
     public:
 
-    RndLearnerV3 (ExprFactory &efac, EZ3 &z3, CHCs& r, unsigned to, bool freqs, bool aggp,
+    RndLearnerV3 (ExprFactory &efac, EZ3 &z3, CHCs& r, unsigned to, bool freqs, bool aggp, int _m,
                   bool _dAllMbp, bool _dAddProp, bool _dAddDat, bool _dStrenMbp, int debug) :
       RndLearnerV2 (efac, z3, r, to, freqs, aggp, debug),
-                  dAllMbp(_dAllMbp), dAddProp(_dAddProp), dAddDat(_dAddDat), dStrenMbp(_dStrenMbp) {}
+                  mbpEqs(_m), dAllMbp(_dAllMbp), dAddProp(_dAddProp), dAddDat(_dAddDat), dStrenMbp(_dStrenMbp) {}
 
     bool checkInit(Expr rel)
     {
@@ -275,7 +276,13 @@ namespace ufo
     void addCandidates(Expr rel, ExprSet& cands)
     {
       int invNum = getVarIndex(rel, decls);
-      for (auto & a : cands) addCandidate(invNum, a);
+      for (auto & a : cands)
+      {
+        ExprSet tmp;
+//        addAllStrengthenings(a, tmp);
+//        for (auto & b : tmp)
+          addCandidate(invNum, a);
+      }
     }
 
     bool finalizeArrCand(Expr& cand, Expr constraint, Expr relFrom)
@@ -1002,23 +1009,42 @@ namespace ufo
         else
           vars2keep.push_back(srcVars[i]);
 
-//      if (mbpEqs != 0)
+      if (mbpEqs != 0)
         u.flatten(ssa, prjcts1, false, vars2keep, keepQuantifiersRepl);
-//      if (mbpEqs != 1)
-//        u.flatten(ssa, prjcts2, true, vars2keep, keepQuantifiersRepl);
+      if (mbpEqs != 1)
+        u.flatten(ssa, prjcts2, true, vars2keep, keepQuantifiersRepl);
 
-//      prjcts1.insert(prjcts1.end(), prjcts2.begin(), prjcts2.end());
+      prjcts1.insert(prjcts1.end(), prjcts2.begin(), prjcts2.end());
       for (auto p : prjcts1)
       {
-        getConj(hasArray ? replaceAll(p, dstVars, srcVars) : p, cands);
         if (hasArray)
         {
-          p = ufo::eliminateQuantifiers(p, dstVars); // for the case of arrays
+          getConj(replaceAll(p, dstVars, srcVars), cands);
+          p = ufo::eliminateQuantifiers(p, dstVars);
           p = weakenForVars(p, dstVars);
+        }
+        else
+        {
+          p = weakenForVars(p, dstVars);
+          addAllStrengthenings(p, cands);
+//          getConj(p, cands);
         }
         p = simplifyArithm(p);
         mbps[invNum].insert(p);
         if (printLog >= 2) outs() << "Generated MBP: " << p << "\n";
+      }
+    }
+
+    void addAllStrengthenings(Expr p, ExprSet& cands)
+    {
+      getConj(p, cands);
+      ExprSet d;
+      getDisj(p, d);
+      for (auto & a : d)
+      {
+        ExprSet tmp = d;
+        tmp.erase(a);
+        addAllStrengthenings(disjoin(tmp, m_efac), cands);
       }
     }
 
@@ -1635,7 +1661,7 @@ namespace ufo
       ruleManager.parse(smt, 2);  // used to be doElim
       BndExpl bnd(ruleManager, false);
 
-      RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
+      RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, 1, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
 
       map<Expr, ExprSet> cands;
       for (int i = 0; i < ruleManager.cycles.size(); i++)
@@ -1666,6 +1692,7 @@ namespace ufo
       }
 
       ds.bootstrap(doDisj);
+      ds.synthesize(maxAttempts, doDisj);
       ds.getInvs(invs);
 
       ruleManager.propagateInvs(invs);
@@ -1673,8 +1700,8 @@ namespace ufo
 
       // for sanity check (can be removed):
       {
-        outs () << "======== Propagating invariants to al CHCs ======\n";
-        RndLearnerV3 dss(m_efac, z3, ruleManager, to, freqs, aggp, 1, dAddProp, dAddDat, dStrenMbp, 0);
+        outs () << "======== Propagating invariants to all CHCs ======\n";
+        RndLearnerV3 dss(m_efac, z3, ruleManager, to, freqs, aggp, 0, 1, dAddProp, dAddDat, dStrenMbp, 0);
         for (auto& rel: ruleManager.decls)
         {
           dss.initializeDecl(rel->left());
@@ -1713,7 +1740,7 @@ namespace ufo
       return;
     }
 
-    RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
+    RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, 0, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
 
     map<Expr, ExprSet> cands;
     for (int i = 0; i < ruleManager.cycles.size(); i++)
