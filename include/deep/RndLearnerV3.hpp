@@ -1396,10 +1396,12 @@ namespace ufo
 
       // try array candidates one-by-one (adapted from `synthesize`)
       // TODO: batching
+      bool arrs = false;
       for (auto & dcl: ruleManager.wtoDecls)
       {
         if (ruleManager.hasArrays[dcl])
         {
+          arrs = true;
           int invNum = getVarIndex(dcl, decls);
           SamplFactory& sf = sfs[invNum].back();
           for (auto it = arrCands[invNum].begin(); it != arrCands[invNum].end();
@@ -1434,9 +1436,11 @@ namespace ufo
             }
           }
         }
-
+      }
         // second round of bootstrapping (to be removed after Houdini supports arrays)
 
+      if (arrs)
+      {
         candidates.clear();
         ExprVector empt;
         for (auto &hr: ruleManager.chcs)
@@ -1568,6 +1572,8 @@ namespace ufo
       Expr e = bnd.toExpr(cycle);
       ssas[invNum] = replaceAll(e, bnd.bindVars.back(), dstVars);
 
+      return; // currently skip arrays
+
       if (qvits[invNum].size() > 0) return;
 
       ExprSet ssa;
@@ -1659,59 +1665,62 @@ namespace ufo
     else
     {
       ruleManager.parse(smt, 2);  // used to be doElim
-      BndExpl bnd(ruleManager, false);
-
-      RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, 1, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
-
-      map<Expr, ExprSet> cands;
-      for (int i = 0; i < ruleManager.cycles.size(); i++)
+      if (ruleManager.cycles.size() > 0)
       {
-        Expr dcl = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
-        if (ds.initializedDecl(dcl)) continue;
-        ds.initializeDecl(dcl);
-        if (invMode == 1) continue;
-        Expr pref = bnd.compactPrefix(i);
-        ExprSet tmp;
-        getConj(pref, tmp);
-        for (auto & t : tmp)
-          if (hasOnlyVars(t, ruleManager.invVars[dcl]))
-            cands[dcl].insert(t);
+        BndExpl bnd(ruleManager, false);
 
-        ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
-        ds.initializeAux(bnd, i, pref);
-      }
+        RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, 1, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
 
-      if (enableDataLearning) ds.getDataCandidates(cands);
-
-      for (auto & dcl: ruleManager.wtoDecls)
-      {
-        for (int i = 0; i < doProp; i++)
-        for (auto & a : cands[dcl]) ds.propagate(dcl, a, true);
-        ds.addCandidates(dcl, cands[dcl]);
-        ds.prepareSeeds(dcl, cands[dcl]);
-      }
-
-      ds.bootstrap(doDisj);
-      ds.synthesize(maxAttempts, doDisj);
-      ds.getInvs(invs);
-
-      ruleManager.propagateInvs(invs);
-      ruleManager.reParse();
-
-      // for sanity check (can be removed):
-      {
-        outs () << "======== Propagating invariants to all CHCs ======\n";
-        RndLearnerV3 dss(m_efac, z3, ruleManager, to, freqs, aggp, 0, 1, dAddProp, dAddDat, dStrenMbp, 0);
-        for (auto& rel: ruleManager.decls)
+        map<Expr, ExprSet> cands;
+        for (int i = 0; i < ruleManager.cycles.size(); i++)
         {
-          dss.initializeDecl(rel->left());
+          Expr dcl = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
+          if (ds.initializedDecl(dcl)) continue;
+          ds.initializeDecl(dcl);
+          if (invMode == 1) continue;
+          Expr pref = bnd.compactPrefix(i);
           ExprSet tmp;
-          getConj(invs[rel->left()], tmp);
-          dss.addCandidates(rel->left(), tmp);
+          getConj(pref, tmp);
+          for (auto & t : tmp)
+            if (hasOnlyVars(t, ruleManager.invVars[dcl]))
+              cands[dcl].insert(t);
+
+          ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
+          ds.initializeAux(bnd, i, pref);
         }
-        dss.bootstrap(doDisj);
-        invs.clear();
-        dss.getInvs(invs);
+
+        if (enableDataLearning) ds.getDataCandidates(cands);
+
+        for (auto & dcl: ruleManager.wtoDecls)
+        {
+          for (int i = 0; i < doProp; i++)
+          for (auto & a : cands[dcl]) ds.propagate(dcl, a, true);
+          ds.addCandidates(dcl, cands[dcl]);
+          ds.prepareSeeds(dcl, cands[dcl]);
+        }
+
+        ds.bootstrap(doDisj);
+        ds.synthesize(maxAttempts, doDisj);
+        ds.getInvs(invs);
+
+        ruleManager.propagateInvs(invs);
+        ruleManager.reParse();
+
+        // for sanity check (can be removed):
+        {
+          outs () << "======== Propagating invariants to all CHCs ======\n";
+          RndLearnerV3 dss(m_efac, z3, ruleManager, to, freqs, aggp, 0, 1, dAddProp, dAddDat, dStrenMbp, 0);
+          for (auto& rel: ruleManager.decls)
+          {
+            dss.initializeDecl(rel->left());
+            ExprSet tmp;
+            getConj(invs[rel->left()], tmp);
+            dss.addCandidates(rel->left(), tmp);
+          }
+          dss.bootstrap(doDisj);
+          invs.clear();
+          dss.getInvs(invs);
+        }
       }
     }
 
