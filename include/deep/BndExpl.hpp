@@ -261,6 +261,10 @@ namespace ufo
       if (isOpX<EQ>(fla) && isOpX<PLUS>(fla->right()) && fla->right()->right() == key){
         assert (var == NULL);
         var = fla->left();
+      } else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
+                 isOpX<UN_MINUS>(fla->right()->right()) && fla->right()->right()->left() == key){
+        assert (var == NULL);
+        var = fla->left();
       } else {
         for (unsigned i = 0; i < fla->arity(); i++)
           getKeyVars(fla->arg(i), key, var);
@@ -987,7 +991,7 @@ namespace ufo
         {
           Expr val = u.getModel(a);
           if (val == a) val = mkMPZ(0, m_efac);
-          assert (isNumeric(val));
+          assert (isNumeric(val) || isBoolean(val));
           tmp[k.first].push_back(val);
         }
 
