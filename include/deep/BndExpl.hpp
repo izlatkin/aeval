@@ -37,6 +37,7 @@ namespace ufo
 
     Expr inv;   // 1-inductive proof
     bool debug;
+    int lookahead;
 
     map<int, KeyTG*> mKeys;
     map<int, ExprVector> kVers;
@@ -44,8 +45,8 @@ namespace ufo
 
     public:
 
-    BndExpl (CHCs& r, bool d = false) :
-      m_efac(r.m_efac), ruleManager(r), u(m_efac), debug(d) {}
+    BndExpl (CHCs& r, int l, bool d = false) :
+      m_efac(r.m_efac), ruleManager(r), u(m_efac), lookahead(l), debug(d) {}
 
     BndExpl (CHCs& r, Expr lms, bool d = false) :
       m_efac(r.m_efac), ruleManager(r), u(m_efac), extraLemmas(lms), debug(d) {}
@@ -387,7 +388,15 @@ namespace ufo
 
                 suffFound = true;
                 if (getTest())
+                {
                   printTest();
+
+                  // try the lookahead method
+
+                  Expr mdl = replaceAll(u.getModel(bindVars.back()), bindVars.back(), ruleManager.invVars[hr.dstRelation]);
+                  outs () << "found: " << mdl << "\n";
+                  letItRun(mdl, hr.dstRelation, todoCHCs, toErCHCs, lookahead, kVersVals.back());
+                }
               }
               // default
             }
@@ -428,6 +437,46 @@ namespace ufo
         cur_bnd++;
       }
       outs () << "Done with TG\n";
+    }
+
+    void letItRun(Expr model, Expr src, set<int>& todoCHCs, set<int>& toErCHCs, int lh, map<int, ExprVector> tmp)
+    {
+      if (lh == 0) return;
+      int still = 0;
+      for (auto & t : todoCHCs)
+        if (find(toErCHCs.begin(), toErCHCs.end(), t) == toErCHCs.end())
+          still++;
+      if (still == 0) return;
+
+      for (auto c : ruleManager.outgs[src])
+      {
+        if (u.isSat(model, ruleManager.chcs[c].body))
+        {
+          auto tmp1 = tmp;
+          int lh1 = lh - 1;
+          if (find(todoCHCs.begin(), todoCHCs.end(), c) != todoCHCs.end() &&
+              find(toErCHCs.begin(), toErCHCs.end(), c) == toErCHCs.end())
+          {
+            toErCHCs.insert(c);
+            lh1 = lookahead;
+
+            if (find(kVersVals.begin(), kVersVals.end(), tmp1) == kVersVals.end())
+            {
+              kVersVals.push_back(tmp1);
+              printTest();
+            }
+          }
+          HornRuleExt& hr = ruleManager.chcs[c];
+          Expr mdl = replaceAll(u.getModel(hr.dstVars),  hr.dstVars, ruleManager.invVars[hr.dstRelation]);
+
+          for (auto & a : mKeys)
+            for (int num = 0; num < a.second->rule.size(); num++)
+              if (a.second->rule[num] == &hr)
+                tmp1[a.first].push_back(u.getModel(hr.locVars[a.second->locPos[num]]));
+
+          letItRun(mdl, hr.dstRelation, todoCHCs, toErCHCs, lh1, tmp1);
+        }
+      }
     }
 
     bool exploreTraces(int cur_bnd, int bnd, bool print = false)

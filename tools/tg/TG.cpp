@@ -102,6 +102,7 @@ int main (int argc, char ** argv)
   set<int> nums;
   getNums(nums, getStrValue("--keys", NULL, argc, argv));
   bool to_skip = getBoolValue("--no-term", false, argc, argv);
+  int lookahead = getIntValue("--lookahead", 0, argc, argv);
   
   // All other attrs are inherited from FreqHorn:
   int max_attempts = getIntValue(OPT_MAX_ATTEMPTS, 10, argc, argv);
@@ -137,6 +138,6 @@ int main (int argc, char ** argv)
   if (do_disj) do_dl = true;
 
   testgen(string(argv[argc-1]), nums, max_attempts, to, densecode, aggressivepruning,
-                     do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s, to_skip, invMode, debug);
+                     do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s, to_skip, invMode, lookahead, debug);
   return 0;
 }
