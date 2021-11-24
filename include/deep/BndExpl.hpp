@@ -980,6 +980,13 @@ namespace ufo
         testfile << "int tot_" << k.first << " = " << kVers[k.first].size() << ";\n";
       }
       testfile << "\n";
+      testfile << "void print_value(int v){\n";
+      testfile << "    FILE* f = fopen(\"number.txt\", \"w\");\n";
+      testfile << "    if (f != NULL){\n";
+      testfile << "    fprintf(f, \"%d \", v); \n";
+      testfile << "    fclose(f); f = NULL;\n";
+      testfile << "    }\n";
+      testfile << "}\n";
       for (auto k : mKeys)
       {
         testfile << "static const int inp_" << k.first << "[] = {";
@@ -998,9 +1005,10 @@ namespace ufo
       for (auto k : mKeys)
       {
         testfile << "const int nondet_" << k.first << "(){\n";
-        testfile << "  if (cnt_" << k.first << " < tot_" << k.first << ")\n";
-        testfile << "    return inp_" << k.first << "[cnt_" << k.first << "++];\n";
-        testfile << "  else return rand();\n";
+        testfile << "  if (cnt_" << k.first << " < tot_" << k.first << "){\n";
+        testfile << "    print_value(inp_" << k.first << "[cnt_" << k.first << "]);\n";
+        testfile << "    return inp_" << k.first << "[cnt_" << k.first << "++];}\n";
+        testfile << "  else {int rr = rand(); print_value(rr); return rr;}\n";
         testfile << "}\n\n";
       }
       testfile.close();
