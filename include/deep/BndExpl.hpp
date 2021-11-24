@@ -37,6 +37,7 @@ namespace ufo
 
     Expr inv;   // 1-inductive proof
     bool debug;
+    int lookahead;
 
     map<int, KeyTG*> mKeys;
     map<int, ExprVector> kVers;
@@ -44,8 +45,8 @@ namespace ufo
 
     public:
 
-    BndExpl (CHCs& r, bool d = false) :
-      m_efac(r.m_efac), ruleManager(r), u(m_efac), debug(d) {}
+    BndExpl (CHCs& r, int l, bool d = false) :
+      m_efac(r.m_efac), ruleManager(r), u(m_efac), lookahead(l), debug(d) {}
 
     BndExpl (CHCs& r, Expr lms, bool d = false) :
       m_efac(r.m_efac), ruleManager(r), u(m_efac), extraLemmas(lms), debug(d) {}
@@ -107,6 +108,7 @@ namespace ufo
       }
       else
       {
+        if (already_unsat(trace)) return;
         for (auto a : ruleManager.outgs[src])
         {
           vector<int> newtrace = trace;
@@ -116,14 +118,60 @@ namespace ufo
       }
     }
 
-    Expr compactPrefix (int num)
+    bool already_unsat(vector<int>& t)
     {
-      vector<int>& pr = ruleManager.prefixes[num];
+      bool unsat = false;
+      for (auto u : unsat_prefs)
+      {
+        if (u.size() > t.size()) continue;
+        bool found = true;
+        for (int j = 0; j < u.size(); j ++)
+        {
+          if (u[j] != t[j])
+          {
+            found = false;
+            break;
+          }
+        }
+        if (found)
+        {
+          unsat = true;
+          break;
+        }
+      }
+      return unsat;
+    }
+
+    Expr compactPrefix (int num, int unr = 0)
+    {
+      vector<int> pr = ruleManager.prefixes[num];
       if (pr.size() == 0) return mk<TRUE>(m_efac);
 
+      for (int j = pr.size() - 1; j >= 0; j--)
+      {
+        vector<int>& tmp = ruleManager.getCycleForRel(pr[j]);
+        for (int i = 0; i < unr; i++)
+          pr.insert(pr.begin() + j, tmp.begin(), tmp.end());
+      }
+
+      pr.push_back(ruleManager.cycles[num][0]);   // we are interested in prefixes, s.t.
+                                                  // the cycle is reachable
       ExprVector ssa;
       getSSA(pr, ssa);
-      while (!(bool)u.isSat(ssa)) ssa.erase(ssa.begin());
+      if (!(bool)u.isSat(ssa))
+      {
+        if (unr > 10)
+        {
+          do {ssa.erase(ssa.begin());}
+          while (!(bool)u.isSat(ssa));
+        }
+        else return compactPrefix(num, unr+1);
+      }
+
+      if (ssa.empty()) return mk<TRUE>(m_efac);
+
+      ssa.pop_back();                              // remove the cycle from the formula
+      bindVars.pop_back();                         // and its variables
       Expr pref = conjoin(ssa, m_efac);
       pref = rewriteSelectStore(pref);
       pref = keepQuantifiersRepl(pref, bindVars.back());
@@ -214,12 +262,17 @@ namespace ufo
       if (isOpX<EQ>(fla) && isOpX<PLUS>(fla->right()) && fla->right()->right() == key){
         assert (var == NULL);
         var = fla->left();
+      } else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
+                 isOpX<UN_MINUS>(fla->right()->right()) && fla->right()->right()->left() == key){
+        assert (var == NULL);
+        var = fla->left();
       } else {
         for (unsigned i = 0; i < fla->arity(); i++)
           getKeyVars(fla->arg(i), key, var);
       }
     }
 
+    set<vector<int>> unsat_prefs;
     void exploreTracesTG(set<int>& keys, int cur_bnd, int bnd, bool skipTerm)
     {
       map<int, Expr> eKeys;
@@ -232,16 +285,22 @@ namespace ufo
       }
 
       set<int> todoCHCs;
-      //to refactor: move the todoCHCs elsewhere
+
+      // first, get points of control-flow divergence
       for (auto & d : ruleManager.decls)
         if (ruleManager.outgs[d->left()].size() > 1)
           for (auto & o : ruleManager.outgs[d->left()])
             todoCHCs.insert(o);
 
-      //to refactor: identify vars
+      // if the code is straight, just add queries
+      if (todoCHCs.empty())
+        for (int i = 0; i < ruleManager.chcs.size(); i++)
+          if (ruleManager.chcs[i].isQuery)
+            todoCHCs.insert(i);
 
       for (auto & hr : ruleManager.chcs)
       {
+        bool anyFound = false;
         for (auto it = eKeys.begin(); it != eKeys.end(); ++it)
         {
           Expr var = NULL;
@@ -249,12 +308,18 @@ namespace ufo
           if (var != NULL)
           {
             int varNum = getVarIndex(var, hr.locVars);
+            anyFound = true;
             assert(varNum >= 0);
 
             mKeys[(*it).first]->eKey = (*it).second;
             mKeys[(*it).first]->rule.push_back(&hr);
             mKeys[(*it).first]->locPos.push_back(varNum);
           }
+        }
+        if (!anyFound)
+        {
+          // optim sice we don't need to use loc vars there
+          hr.body = eliminateQuantifiers(hr.body, hr.locVars);
         }
       }
 
@@ -263,11 +328,10 @@ namespace ufo
         if (mKeys[(*it).first]->locPos.empty())
         {
           outs() << "Error: key " << (*it).second << " not found\n";
-          exit(1);
+          //exit(1);
         }
       }
 
-      set<vector<int>> unsat_prefs;
       while (cur_bnd <= bnd && !todoCHCs.empty())
       {
         outs () << "new iter with cur_bnd = "<< cur_bnd <<"\n";
@@ -277,15 +341,14 @@ namespace ufo
           vector<vector<int>> traces;
           getAllTracesTG(mk<TRUE>(m_efac), a, cur_bnd, vector<int>(), traces);
 
-          outs () << "  exploring traces (" << traces.size() << ") of length " << cur_bnd << ";       todo(";
-          for (auto & b : todoCHCs)
+          outs () << "  exploring traces (" << traces.size() << ") of length " << cur_bnd << ";       # of todos = " << todoCHCs.size() << "\n";
+ /*         for (auto & b : todoCHCs)
           {
             outs () << b << ", ";
           }
-          outs () << "\b\b)\n";
+          outs () << "\b\b)\n";*/
 
           int tot = 0;
-          int tot2 = 0;
           for (int trNum = 0; trNum < traces.size() && !todoCHCs.empty(); trNum++)
           {
             auto & t = traces[trNum];
@@ -295,27 +358,6 @@ namespace ufo
                   find(toErCHCs.begin(), toErCHCs.end(), c) == toErCHCs.end())
                 apps.insert(c);
             if (apps.empty()) continue;  // should not happen
-            tot2++;
-
-            bool already_unsat = false;
-            for (auto u : unsat_prefs)
-            {
-              bool found = true;
-              for (int j = 0; j < u.size(); j ++)
-              {
-                if (u[j] != t[j])
-                {
-                  found = false;
-                  break;
-                }
-              }
-              if (found)
-              {
-                already_unsat = true;
-                break;
-              }
-            }
-            if (already_unsat) continue;
 
             tot++;
 
@@ -341,19 +383,20 @@ namespace ufo
             {
               if (hr.dstRelation == ruleManager.failDecl || skipTerm)
               {
-//                outs () << "\n    visited: ";
                 for ( auto & b : apps)
-                {
                   toErCHCs.insert(b);
-//                  outs () << b << ", ";
-                }
-//                outs () << "\b\n      SAT trace: true ";
-//                for (auto c : t) outs () << " -> " << *ruleManager.chcs[c].dstRelation;
-//                outs () << "\n       Model:\n";
 
                 suffFound = true;
                 if (getTest())
+                {
                   printTest();
+
+                  // try the lookahead method
+
+                  Expr mdl = replaceAll(u.getModel(bindVars.back()), bindVars.back(), ruleManager.invVars[hr.dstRelation]);
+                  outs () << "found: " << mdl << "\n";
+                  letItRun(mdl, hr.dstRelation, todoCHCs, toErCHCs, lookahead, kVersVals.back());
+                }
               }
               // default
             }
@@ -388,10 +431,51 @@ namespace ufo
               }
             }
           }
-          outs () << "    -> actually explored:  " << tot << "/" << tot2 << ", |unsat prefs| = " << unsat_prefs.size() << "\n";
+          outs () << "    -> actually explored:  " << tot << ", |unsat prefs| = " << unsat_prefs.size() << "\n";
         }
         for (auto a : toErCHCs) todoCHCs.erase(a);
         cur_bnd++;
+      }
+      outs () << "Done with TG\n";
+    }
+
+    void letItRun(Expr model, Expr src, set<int>& todoCHCs, set<int>& toErCHCs, int lh, map<int, ExprVector> tmp)
+    {
+      if (lh == 0) return;
+      int still = 0;
+      for (auto & t : todoCHCs)
+        if (find(toErCHCs.begin(), toErCHCs.end(), t) == toErCHCs.end())
+          still++;
+      if (still == 0) return;
+
+      for (auto c : ruleManager.outgs[src])
+      {
+        if (u.isSat(model, ruleManager.chcs[c].body))
+        {
+          auto tmp1 = tmp;
+          int lh1 = lh - 1;
+          if (find(todoCHCs.begin(), todoCHCs.end(), c) != todoCHCs.end() &&
+              find(toErCHCs.begin(), toErCHCs.end(), c) == toErCHCs.end())
+          {
+            toErCHCs.insert(c);
+            lh1 = lookahead;
+
+            if (find(kVersVals.begin(), kVersVals.end(), tmp1) == kVersVals.end())
+            {
+              kVersVals.push_back(tmp1);
+              printTest();
+            }
+          }
+          HornRuleExt& hr = ruleManager.chcs[c];
+          Expr mdl = replaceAll(u.getModel(hr.dstVars),  hr.dstVars, ruleManager.invVars[hr.dstRelation]);
+
+          for (auto & a : mKeys)
+            for (int num = 0; num < a.second->rule.size(); num++)
+              if (a.second->rule[num] == &hr)
+                tmp1[a.first].push_back(u.getModel(hr.locVars[a.second->locPos[num]]));
+
+          letItRun(mdl, hr.dstRelation, todoCHCs, toErCHCs, lh1, tmp1);
+        }
       }
     }
 
@@ -956,7 +1040,7 @@ namespace ufo
         {
           Expr val = u.getModel(a);
           if (val == a) val = mkMPZ(0, m_efac);
-          assert (isNumeric(val));
+          assert (isNumeric(val) || isBoolean(val));
           tmp[k.first].push_back(val);
         }
 
