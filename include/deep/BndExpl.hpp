@@ -1065,7 +1065,7 @@ namespace ufo
       }
       testfile << "\n";
       testfile << "void print_value(int v){\n";
-      testfile << "    FILE* f = fopen(\"number.txt\", \"w\");\n";
+      testfile << "    FILE* f = fopen(\"number.txt\", \"a\");\n";
       testfile << "    if (f != NULL){\n";
       testfile << "    fprintf(f, \"%d \", v); \n";
       testfile << "    fclose(f); f = NULL;\n";
