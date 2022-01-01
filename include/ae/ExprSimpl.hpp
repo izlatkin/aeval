@@ -150,30 +150,31 @@ namespace ufo
     return conjoin(comm, d1->getFactory());
   }
 
-  inline static Expr distribDisjoin(ExprVector& d, ExprFactory &efac)
+  template <typename T> static Expr distribDisjoin(T& d, ExprFactory &efac)
   {
     if (d.size() <= 1) return disjoin(d, efac);
 
     ExprSet comm;
     vector<ExprSet> dsjs;
     dsjs.push_back(ExprSet());
-    getConj(d[0], dsjs.back());
+    auto it = d.begin();
+    getConj(*it, dsjs.back());
     comm = dsjs.back();
-    for (int i = 1; i < d.size(); i++)
+    for (it = std::next(it); it != d.end(); ++it)
     {
       ExprSet updComm, tmp;
       dsjs.push_back(ExprSet());
-      getConj(d[i], dsjs.back());
+      getConj(*it, dsjs.back());
       tmp = dsjs.back();
       distribDisjoin (comm, tmp, updComm);
       comm = updComm;
     }
 
     ExprSet toDisj;
-    for (int i = 0; i < d.size(); i++)
+    for (auto a : dsjs)
     {
-      minusSets(dsjs[i], comm);
-      toDisj.insert(conjoin(dsjs[i], efac));
+      minusSets(a, comm);
+      toDisj.insert(conjoin(a, efac));
     }
     comm.insert(disjoin(toDisj, efac));
     return conjoin(comm, efac);
@@ -201,12 +202,30 @@ namespace ufo
 
   inline static bool isBoolean(Expr a)
   {
-    return typeOf(a) == mk<BOOL_TY>(a->getFactory());
+    Expr t = typeOf(a);
+    if (t == NULL) return false;
+    return isOpX<BOOL_TY>(t);
   }
 
   inline static bool isNumeric(Expr a)
   {
-    return typeOf(a) == mk<INT_TY>(a->getFactory());
+    Expr t = typeOf(a);
+    if (t == NULL) return false;
+    return isOpX<INT_TY>(t);
+  }
+
+  inline static bool isReal(Expr a)
+  {
+    Expr t = typeOf(a);
+    if (t == NULL) return false;
+    return isOpX<REAL_TY>(t);
+  }
+
+  inline static bool isArray(Expr a)
+  {
+    Expr t = typeOf(a);
+    if (t == NULL) return false;
+    return isOpX<ARRAY_TY>(t);
   }
 
   inline static bool isNumericEq(Expr a)
@@ -217,6 +236,16 @@ namespace ufo
   inline static bool isNumericConst(Expr e)
   {
     return isOpX<MPZ>(e) || isOpX<MPQ>(e);
+  }
+
+  inline static unsigned containsNum (Expr a, Expr b)
+  {
+    if (a == b) return 1;
+
+    unsigned res = 0;
+    for (unsigned i = 0; i < a->arity(); i++)
+      res = res + containsNum(a->arg(i), b);
+    return res;
   }
 
   inline static void findComplexNumerics (Expr a, ExprSet &terms)
@@ -257,7 +286,7 @@ namespace ufo
 
   inline static void getChainOfStores (Expr a, ExprSet &stores)
   {
-    if (isOp<STORE>(a))
+    if (isOpX<STORE>(a))
     {
       stores.insert(a);
       getChainOfStores(a->left(), stores);
@@ -933,6 +962,30 @@ namespace ufo
     return e;
   }
 
+  inline static Expr simplifyDiv (Expr e)
+  {
+    if (isOpX<IDIV>(e) && isOpX<MPZ>(e->right()))
+    {
+      cpp_int coef = 1;
+      cpp_int divider = lexical_cast<cpp_int>(e->right());
+      ExprVector ops;
+      getMultOps (e->left(), ops);
+
+      bool onlyNum = true;
+      for (auto a : ops)
+        if (isOpX<MPZ>(a))
+          coef *= lexical_cast<cpp_int>(a);
+        else
+          onlyNum = false;
+
+      if (coef == 0)
+        return mkMPZ (0, e->getFactory());
+      if (onlyNum)
+        return mkMPZ (coef / divider, e->getFactory());
+    }
+    return e;
+  }
+
   inline static Expr simplifyIte (Expr exp)  // simple version, on the syntactic level
   {
     ExprFactory &efac = exp->getFactory();
@@ -1092,94 +1145,6 @@ namespace ufo
     return reBuildCmp(exp, l, r);
   }
 
-  // GF: to rewrite/remove
-  inline static Expr simplifiedPlus (Expr exp, Expr to_skip){
-    ExprVector args;
-    Expr ret;
-    bool f = false;
-
-    for (ENode::args_iterator it = exp->args_begin(),
-         end = exp->args_end(); it != end; ++it){
-      if (*it == to_skip) f = true;
-      else args.push_back (*it);
-    }
-
-    if (f == false) {
-      args.push_back(additiveInverse(to_skip));
-    }
-
-    if (args.size() == 1) {
-      ret = args[0];
-    }
-
-    else if (args.size() == 2){
-      if (isOpX<UN_MINUS>(args[0]) && !isOpX<UN_MINUS>(args[1]))
-        ret = mk<MINUS>(args[1], args[0]->left());
-      else if (!isOpX<UN_MINUS>(args[0]) && isOpX<UN_MINUS>(args[1]))
-        ret = mk<MINUS>(args[0], args[1]->left());
-
-      else ret = mknary<PLUS>(args);
-
-    } else {
-      ret = mknary<PLUS>(args);
-    }
-    return ret;
-  }
-
-  // return a - b
-  inline static Expr simplifiedMinus (Expr a, Expr b){
-    // GF: to rewrite/remove
-    Expr ret = mk<MINUS>(a, b);
-
-    if (a == b) {
-      ret = mkMPZ (0, a->getFactory());
-    } else
-
-      if (isOpX<PLUS>(a)){
-        return simplifiedPlus(a, b);
-      } else
-
-        if (isOpX<PLUS>(b)){
-          Expr res = simplifiedPlus(b, a);
-          return mk<UN_MINUS>(res);
-        } else
-
-          if (isOpX<MINUS>(a)){
-            if (a->left() == b) ret = mk<UN_MINUS>(a->right());
-          } else
-
-            if (isOpX<MINUS>(b)){
-              if (a == b->right()) ret = mk<UN_MINUS>(b->left());
-            } else
-
-              if (isOpX<UN_MINUS>(b)) {
-                if (b->left() == mkMPZ (0, a->getFactory())) {
-                  ret = a;
-                } else {
-                  ret = mk<PLUS>(a,b->left());
-                }
-              } else
-
-                if (mkMPZ ((-1), a->getFactory()) == b) {
-                  ret = simplifiedPlus(a, mkMPZ (1, a->getFactory()));
-                } else
-
-                  if (b == mkMPZ (0, a->getFactory())) {
-                    ret = a;
-                  } else
-
-                    if (a == mkMPZ (0, a->getFactory())){
-                      if (isOpX<UN_MINUS>(b)){
-                        ret = b->left();
-                      }
-                      else {
-                        ret = mk<UN_MINUS>(b);
-                      }
-                    }
-
-    return ret;
-  }
-
   static Expr simplifyArithmDisjunctions(Expr fla, bool keepRedundandDisj);
   static Expr simplifyArithmConjunctions(Expr fla, bool keepRedundandConj);
 
@@ -1195,14 +1160,9 @@ namespace ufo
 
     Expr operator() (Expr exp)
     {
-      if (isOpX<PLUS>(exp))
+      if (isOpX<PLUS>(exp) || isOpX<MINUS>(exp))
       {
         return simplifyPlus(exp);
-      }
-
-      if (isOpX<MINUS>(exp) && exp->arity() == 2)
-      {
-        return simplifiedMinus(exp->left(), exp->right());
       }
 
       if (isOpX<MULT>(exp))
@@ -1215,14 +1175,14 @@ namespace ufo
         return simplifyMod(exp);
       }
 
+      if (isOpX<IDIV>(exp))
+      {
+        return simplifyDiv(exp);
+      }
+
       if (isOpX<UN_MINUS>(exp))
       {
         return additiveInverse(exp->left());
-      }
-
-      if (isOpX<MINUS>(exp))
-      {
-        if (isOpX<UN_MINUS>(exp->right())) return mk<PLUS>(exp->left(), exp->right()->left());
       }
 
       if (isOp<ComparissonOp>(exp) && isNumeric(exp->right()))
@@ -1266,6 +1226,9 @@ namespace ufo
           return mk<TRUE>(efac);
 
         if (isOpX<TRUE>(exp->right()))
+          return mk<TRUE>(efac);
+
+        if (isOpX<FALSE>(exp->left()))
           return mk<TRUE>(efac);
 
         if (isOpX<FALSE>(exp->right()))
@@ -1331,6 +1294,13 @@ namespace ufo
             continue;
           }
           newDsjs.insert(a);
+        }
+        if (newDsjs.size() == 2)
+        {
+          Expr lhs = *newDsjs.begin();
+          Expr rhs = *(std::next(newDsjs.begin()));
+          if (lhs == mkNeg(rhs)) return mk<TRUE>(efac);
+          if (rhs == mkNeg(lhs)) return mk<TRUE>(efac);
         }
         return disjoin (newDsjs, efac);
       }
@@ -1473,6 +1443,29 @@ namespace ufo
   {
     RW<SimplifyBoolExpr> rw(new SimplifyBoolExpr(exp->getFactory()));
     return dagVisit (rw, exp);
+  }
+
+  inline static void simplify(function<Expr(Expr)> foo, ExprSet& exps){
+    ExprSet expsn;
+    for (auto e : exps)
+    {
+      e = foo(e);
+      if (!isOpX<TRUE>(e))
+        expsn.insert(e);
+    }
+    exps = expsn;
+  }
+
+  inline static void simplify(ExprSet& exps, bool arr = true)
+  {
+    if (exps.empty()) return;
+    simplify([](Expr in){ return simplifyArithm(in, false, false); }, exps);
+    simplify(simplifyBool, exps);
+    if (arr && containsOp<ARRAY_TY>(conjoin(exps, (*exps.begin())->getFactory())))
+    {
+      simplify(simplifyArr, exps);
+      simplify(exps, false); // arrays may introduce additional arithm/bool structures
+    }
   }
 
   // helper used in `constantPropagationRec`:
@@ -2123,16 +2116,18 @@ namespace ufo
 
   inline static Expr cloneVar(Expr var, Expr new_name) // ... and give a new_name to the clone
   {
-    if (isIntConst(var))
+    if (isOpX<FAPP>(var))
+      return replaceAll(var, var->left()->left(), new_name);
+
+    Expr t = typeOf(var);
+    if (isOpX<INT_TY>(t))
       return intConst(new_name);
-    else if (isRealConst(var))
+    else if (isOpX<REAL_TY>(t))
       return realConst(new_name);
-    else if (isBoolConst(var))
+    else if (isOpX<BOOL_TY>(t))
       return boolConst(new_name);
-    else if (isConst<ARRAY_TY> (var))
-      return mkConst(new_name, mk<ARRAY_TY> (
-             mk<INT_TY> (new_name->getFactory()),
-             mk<INT_TY> (new_name->getFactory()))); // GF: currently, only Arrays over Ints
+    else if (isOpX<ARRAY_TY>(t))
+      return mkConst(new_name, mk<ARRAY_TY> (t->left(), t->right()));
 
     else return NULL;
   }
@@ -2816,7 +2811,6 @@ namespace ufo
     for (auto & var : quantified)
     {
       ExprSet eqs;
-      ExprSet stores;
 
       for (unsigned it = 0; it < cnjs.size(); )
       {
@@ -2852,17 +2846,30 @@ namespace ufo
           cnjs.push_back(mk<EQ>(mk<MOD>(normalized->right(), normalized->left()->left()),
                              mkMPZ (0, efac)));
         }
-        else if (isOpX<STORE>(normalized->right()) && var == normalized->right()->left() &&
-                 emptyIntersect(normalized->left(), quantified))
+        else if (isArray(var) && containsNum(exp, var) == 1)
         {
-          // one level of storing (to be extended)
-          stores.insert(normalized);
-        }
-        else if (isOpX<STORE>(normalized->left()) && var == normalized->left()->left() &&
-                 emptyIntersect(normalized->right(), quantified))
-        {
-          normalized = mk<EQ>(normalized->right(), normalized->left());
-          stores.insert(normalized);
+          Expr store = NULL;
+          if (isOpX<STORE>(normalized->right()) && var == normalized->right()->left() &&
+                   emptyIntersect(normalized->left(), quantified))
+          {
+            // one level of storing (to be extended)
+            store = normalized;
+          }
+          else if (isOpX<STORE>(normalized->left()) && var == normalized->left()->left() &&
+                   emptyIntersect(normalized->right(), quantified))
+          {
+            normalized = mk<EQ>(normalized->right(), normalized->left());
+            store = normalized;
+          }
+
+          if (store != NULL)
+          {
+            // assume "store" = (A = store(var, x, y))
+            cnjs[it] = mk<EQ>(mk<SELECT>(store->left(), store->right()->right()),
+                              store->right()->last());
+          }
+          it++;
+          continue;
         }
         else
           { it++; continue;}
@@ -2872,38 +2879,6 @@ namespace ufo
 
         cnjs[it] = normalized;
         it++;
-      }
-
-      if (stores.size() == 1)
-      {
-        Expr store = *stores.begin();
-        // assume "store" = (A = store(var, x, y))
-        vector<int> toErase;
-        bool safeToErase = true;
-        for (unsigned it = 0; it < cnjs.size(); it++)
-        {
-          if (emptyIntersect(var, cnjs[it])) continue;
-          if (cnjs[it] == store) toErase.push_back(it);
-          else safeToErase = false;
-          if (!safeToErase) break;
-
-          // GF: to revisit; might be broken
-          /* ExprVector se;
-          filter (cnjs[it], IsSelect (), inserter(se, se.begin()));
-          for (auto s : se) {
-            if (contains(store, s)) continue;
-            if (s->left() == var) {
-              Expr cmp = simplifyCmp(mk<EQ>(store->right()->right(), s->right()));
-              cnjs[it] = replaceAll(cnjs[it], s, simplifyIte(
-                         mk<ITE>(cmp,
-                                 store->right()->last(),
-                                 mk<SELECT>(store->left(), s->right()))));}} */
-        }
-        if (safeToErase && !toErase.empty())
-        {
-          for (int e = toErase.size() - 1; e >= 0; e--) cnjs.erase(cnjs.begin() + toErase[e]);
-          cnjs.push_back(mk<EQ>(mk<SELECT>(store->left(), store->right()->right()), store->right()->last()));
-        }
       }
 
       if (eqs.empty()) continue;
