@@ -1722,6 +1722,10 @@ namespace ufo
           dss.getInvs(invs);
         }
       }
+      else
+      {
+        ruleManager.reParse();
+      }
     }
 
     if (nums.size() > 0)

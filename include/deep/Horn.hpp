@@ -666,7 +666,7 @@ namespace ufo
           if (debug >= 2) outs () << "  Eliminating CHC: " << h->srcRelation << " -> " << h->dstRelation << "\n";
           if (debug >= 3) outs () << "    inductive but does not change vars: " << h->body << "\n";
           toEraseChcs.insert(i);
-          redChcs.insert(i);
+          // redChcs.insert(i);
         }
         else ++h;
       }
