@@ -265,7 +265,10 @@ namespace ufo
       if (isOpX<EQ>(fla) && isOpX<PLUS>(fla->right()) && fla->right()->right() == key){
         assert (var == NULL);
         var = fla->left();
-      } else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
+      } else if (isOpX<EQ>(fla) && isOpX<NEQ>(fla->right()) && fla->right()->right() == mk<UN_MINUS>(key)){
+        assert (var == NULL);
+        var = fla->left();
+      }else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
                  isOpX<UN_MINUS>(fla->right()->right()) && fla->right()->right()->left() == key){
         assert (var == NULL);
         var = fla->left();
