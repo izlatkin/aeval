@@ -94,6 +94,7 @@ namespace ufo
       }
     }
 
+    set<int> unreach_chcs;
     void getAllTracesTG (Expr src, int chc, int len, vector<int> trace, vector<vector<int>>& traces)
     {
       if (len == 1)
@@ -111,6 +112,8 @@ namespace ufo
         if (already_unsat(trace)) return;
         for (auto a : ruleManager.outgs[src])
         {
+          if (find(unreach_chcs.begin(), unreach_chcs.end(), a) != unreach_chcs.end())
+            continue;
           vector<int> newtrace = trace;
           newtrace.push_back(a);
           getAllTracesTG(ruleManager.chcs[a].dstRelation, chc, len-1, newtrace, traces);
@@ -340,8 +343,8 @@ namespace ufo
         {
           vector<vector<int>> traces;
           getAllTracesTG(mk<TRUE>(m_efac), a, cur_bnd, vector<int>(), traces);
-
-          outs () << "  exploring traces (" << traces.size() << ") of length " << cur_bnd << ";       # of todos = " << todoCHCs.size() << "\n";
+          outs () << "  exploring traces (" << traces.size() << ") of length "
+                  << cur_bnd << ";       # of todos = " << todoCHCs.size() << "\n";
  /*         for (auto & b : todoCHCs)
           {
             outs () << b << ", ";
@@ -367,6 +370,7 @@ namespace ufo
             {
               outs () << "\n    unreachable: " << t.back() << "\n";
               toErCHCs.insert(t.back());
+              unreach_chcs.insert(t.back());
               unsat_prefs.insert(t);
               continue;
             }

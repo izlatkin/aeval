@@ -1700,7 +1700,8 @@ namespace ufo
         }
 
         ds.bootstrap(doDisj);
-        ds.synthesize(maxAttempts, doDisj);
+        if (invMode == 2)
+          ds.synthesize(maxAttempts, doDisj);
         ds.getInvs(invs);
 
         ruleManager.propagateInvs(invs);
