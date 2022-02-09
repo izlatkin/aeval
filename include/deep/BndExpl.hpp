@@ -1064,6 +1064,7 @@ namespace ufo
       ofstream testfile;
       testfile.open ("testgen_" + lexical_cast<string>(kVersVals.size() - 1) + ".h");
       testfile << "#include <stdlib.h>\n";
+      testfile << "int precisions = 10;\n";
 
       for (auto k : mKeys)
       {
@@ -1099,7 +1100,7 @@ namespace ufo
         testfile << "  if (cnt_" << k.first << " < tot_" << k.first << "){\n";
         testfile << "    print_value(inp_" << k.first << "[cnt_" << k.first << "]);\n";
         testfile << "    return inp_" << k.first << "[cnt_" << k.first << "++];}\n";
-        testfile << "  else {int rr = rand(); print_value(rr); return rr;}\n";
+        testfile << "  else {int rr = rand() % precisions; print_value(rr); return rr;}\n";
         testfile << "}\n\n";
       }
       testfile.close();
