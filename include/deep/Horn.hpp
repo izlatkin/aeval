@@ -1,6 +1,7 @@
 #ifndef HORN__HPP__
 #define HORN__HPP__
 
+#include "fstream"
 #include "ae/AeValSolver.hpp"
 #include "ae/NumUtils.hpp"
 
@@ -84,11 +85,10 @@ namespace ufo
     Expr failDecl;
     vector<HornRuleExt> chcs, chcsOrig, chcsTmp;
     vector<HornRuleExt*> wtoCHCs;
-    ExprVector wtoDecls;
+    ExprVector loopheads;
     ExprSet decls, declsTmp;
     map<Expr, ExprVector> invVars, invVarsPrime;
     map<Expr, vector<int>> outgs;
-    vector<vector<int>> prefixes, cycles;
     map<Expr, bool> hasArrays;
     map<Expr, vector<int>> iterators;
     bool hasAnyArrays;
@@ -96,6 +96,10 @@ namespace ufo
     set<int> chcsToCheck1, chcsToCheck2, toEraseChcs, redChcs;
     int glob_ind = 0;
     mmtree deps;
+    bool cycleSearchDone = false;
+    map<Expr, vector<vector<int>>> cycles, prefixes;
+    vector<vector<int>> acyclic;
+    map<Expr, vector<vector<int>>>::iterator cyclesIt;
 
     CHCs(ExprFactory &efac, EZ3 &z3, int d = false) :
       u(efac), m_efac(efac), m_z3(z3), hasAnyArrays(false), debug(d) {};
@@ -315,7 +319,8 @@ namespace ufo
       for (int i = 0; i < chcs.size(); i++)
         outgs[chcs[i].srcRelation].push_back(i);
 
-      if (doElim) wtoSort();
+      if (doElim)
+        findCycles();
 
       if (debug >= 2)
         for (auto & d : decls){
@@ -326,20 +331,17 @@ namespace ufo
       if (debug >= 2)
       {
         outs () << (doElim ? "  Simplified " : "  Parsed ") << "CHCs:\n";
-        print(debug >= 3);
+        print(debug >= 3, true);
       }
       return true;
     }
 
-    void reParse()
+    void reParse(bool doElim = false)
     {
       chcs = chcsOrig;
       for (auto it = redChcs.rbegin(); it != redChcs.rend(); ++it)
         if (*it < chcs.size())
-        {
-          remCycleForRel(*it);
           chcs.erase(chcs.begin() + *it);
-        }
 
       decls.insert(declsTmp.begin(), declsTmp.end());
 
@@ -362,16 +364,21 @@ namespace ufo
           }
         }
       }
+
       for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
         chcs.erase(chcs.begin() + *it);
 
+      if (debug > 0) outs () << "Contextualized: " << chcs.size()
+                          << " CHCs and " << decls.size() << " declarations\n";
+
       outgs.clear();
-      wtoCHCs.clear();
+      prefixes.clear();
+      cycles.clear();
 
       for (int i = 0; i < chcs.size(); i++)
         outgs[chcs[i].srcRelation].push_back(i);
 
-      wtoSort();
+      if (doElim) findCycles();  // maybe expensive, to optimize
 
       if (debug >= 2)
         for (auto & d : decls){
@@ -666,7 +673,7 @@ namespace ufo
           if (debug >= 2) outs () << "  Eliminating CHC: " << h->srcRelation << " -> " << h->dstRelation << "\n";
           if (debug >= 3) outs () << "    inductive but does not change vars: " << h->body << "\n";
           toEraseChcs.insert(i);
-          // redChcs.insert(i);
+          redChcs.insert(i);
         }
         else ++h;
       }
@@ -892,14 +899,192 @@ namespace ufo
       chcsToVisit.erase(num);
     }
 
+    void getAllTraces (Expr src, Expr dst, int len, vector<int> trace,
+                  vector<vector<int>>& traces, bool once = false)
+    {
+      if (len == 1)
+      {
+        for (auto a : outgs[src])
+        {
+          if (chcs[a].dstRelation == dst)
+          {
+            if (once && find(trace.begin(), trace.end(), a) != trace.end())
+              continue;
+            vector<int> newtrace = trace;
+            newtrace.push_back(a);
+            traces.push_back(newtrace);
+          }
+        }
+      }
+      else
+      {
+        for (auto a : outgs[src])
+        {
+          if (once && find(trace.begin(), trace.end(), a) != trace.end())
+            continue;
+          vector<int> newtrace = trace;
+          newtrace.push_back(a);
+          getAllTraces(chcs[a].dstRelation, dst, len-1, newtrace, traces, once);
+        }
+      }
+    }
+
+    bool isRelVisited(vector<int>& trace, ExprVector& av, Expr rel)
+    {
+      for (auto t : trace)
+        if (chcs[t].dstRelation == rel)
+          return true;
+      return find(av.begin(), av.end(), rel) != av.end();
+    }
+
+    void getAllAcyclicTraces (Expr src, Expr dst, int len, vector<int> trace,
+                  vector<vector<int>>& traces, ExprVector& av)
+    {
+      if (len == 1)
+      {
+        for (auto a : outgs[src])
+        {
+          if (chcs[a].dstRelation == dst)
+          {
+            vector<int> newtrace = trace;
+            newtrace.push_back(a);
+            traces.push_back(newtrace);
+          }
+        }
+      }
+      else
+      {
+        for (auto a : outgs[src])
+        {
+          if (chcs[a].dstRelation == dst ||
+              isRelVisited(trace, av, chcs[a].dstRelation))
+            continue;
+          vector<int> newtrace = trace;
+          newtrace.push_back(a);
+          getAllAcyclicTraces(chcs[a].dstRelation, dst, len-1, newtrace, traces, av);
+        }
+      }
+    }
+
+    void findCycles()
+    {
+      print(false, true);
+      ExprVector av;
+      findCycles(mk<TRUE>(m_efac), failDecl, av);
+      cycleSearchDone = true;
+      cyclesIt = cycles.begin();
+    }
+
+    bool findCycles(Expr src, Expr dst, ExprVector& avoid)
+    {
+      if (debug >= 2) outs () << "findCycles:  " << src << " => " << dst << "\n";
+      vector<vector<int>> nonCycleTraces;
+      ExprVector highLevelRels;
+      for (int i = 1; i < chcs.size(); i++)
+      {
+        if (debug >= 2)
+        {
+          outs () << ".";
+          outs().flush();
+        }
+        getAllAcyclicTraces(src, dst, i, vector<int>(), nonCycleTraces, avoid);
+      }
+
+      bool tracesFound = nonCycleTraces.size() > 0;
+      map <Expr, vector<vector<int>>> prefs;
+      for (auto & d : nonCycleTraces)
+      {
+        vector<int> tmp;
+        for (auto & chcNum : d)
+        {
+          if (chcs[chcNum].isQuery) break;
+          Expr& r = chcs[chcNum].dstRelation;
+          tmp.push_back(chcNum);
+          if (find(avoid.begin(), avoid.end(), r) == avoid.end())
+          {
+            prefs[r].push_back(tmp);
+            unique_push_back(r, highLevelRels);
+          }
+        }
+      }
+
+      if (tracesFound)
+      {
+        if (src == dst)
+        {
+          if (debug)
+            outs () << "traces num for " << src << ": " << nonCycleTraces.size() << "\n";
+          cycles[src] = nonCycleTraces;
+        }
+        else
+        {
+          acyclic = nonCycleTraces;
+        }
+      }
+      else
+      {
+        assert(src == dst);
+      }
+
+      ExprVector avoid2 = avoid;
+      for (auto & d : highLevelRels)
+      {
+        avoid2.push_back(d);
+        bool nestedCycle = findCycles(d, d, avoid2);
+        if (nestedCycle)
+        {
+          prefixes[d] = prefs[d]; // to debug
+        }
+      }
+
+      // WTO sorting is here now:
+      if (tracesFound)
+      {
+        if (src == dst)
+        {
+          unique_push_back(src, loopheads);      // could there be duplicates?
+          if (debug) outs () << "  loophead found: " << src << "\n";
+        }
+        else if (debug) outs () << "  global:\n";
+      }
+
+      for (auto c : nonCycleTraces)
+      {
+        if (debug > 5)
+        {
+          outs () << "    trace: " << chcs[c[0]].srcRelation;
+          for (auto h : c)
+            outs () << " -> " << chcs[h].dstRelation << " ";
+          outs () << "\n";
+        }
+
+        for (auto h : c)
+          unique_push_back(&chcs[h], wtoCHCs);
+      }
+
+      return tracesFound;
+    }
+
+    vector<int> getPrefix(Expr rel) // get only first one; to extend
+    {
+      assert(!cycles[rel].empty());
+      assert(!prefixes[rel].empty());
+      vector<int> pref = prefixes[rel][0];
+      assert(!pref.empty());
+      if (chcs[pref[0]].isFact)
+        return pref;
+      vector<int> ppref = getPrefix(chcs[pref[0]].srcRelation);
+      ppref.insert(ppref.end(), pref.begin(), pref.end());
+      return ppref;
+    }
+
     bool hasCycles()
     {
-      if (cycles.size() > 0) return true;
+      if (cycleSearchDone) return cycles.size() > 0;
+      findCycles();
 
-      for (int i = 0; i < chcs.size(); i++)
-        if (chcs[i].isFact) findCycles(i, vector<int>());
-
-      assert (cycles.size() == prefixes.size());
+      // assert (cycles.size() == prefixes.size());
+      /*
       if (debug >= 3)
         for (int i = 0; i < cycles.size(); i++)
         {
@@ -910,127 +1095,22 @@ namespace ufo
           for (auto & chcNum : c) outs () << chcNum << " -> ";
           outs () << "]  ";
           auto & d = cycles[i];
-          outs () << "      cycle: ";
+          outs () << "\n      cycle: ";
           for (auto & chcNum : d) outs () << *chcs[chcNum].srcRelation << " -> ";
           outs () << "    [";
           for (auto & chcNum : d) outs () << chcNum << " -> ";
-          outs () << "]\n";
+          outs () << "]\n\n";
         }
+      */
       return (cycles.size() > 0);
     }
 
-    void findCycles(int chcNum, vector<int> vec)
+    Expr getNextCycle()
     {
-      Expr srcRel = chcs[chcNum].srcRelation;
-      Expr dstRel = chcs[chcNum].dstRelation;
-      bool res = false;
-      for (int i = 0; i < vec.size(); i++)
-      {
-        auto c = vec[i];
-        bool newCycle = (chcs[c].srcRelation == srcRel);
-        // TODO: some cycles can be redundant
-        if (newCycle)
-        {
-          cycles.push_back(vector<int>());
-          prefixes.push_back(vector<int>());
-          for (int j = 0; j < i; j++) prefixes.back().push_back(vec[j]);
-          res = true;
-        }
-        if (res)
-        {
-          cycles.back().push_back(c);
-        }
-      }
-
-      if (! res)
-      {
-        vec.push_back(chcNum);
-
-        for (auto & i : outgs[dstRel])
-        {
-          if (chcs[i].dstRelation == failDecl) continue;
-          bool newRel = true;
-          for (auto & c : cycles)
-          {
-            if (c[0] == i)
-            {
-              newRel = false;
-              break;
-            }
-          }
-          if (newRel) findCycles(i, vec);
-        }
-      }
-    }
-
-    // old vers; to rem
-    void getCycleForRel(Expr rel, vector<int>& cycle)
-    {
-      for (auto & c : cycles)
-      {
-        if (chcs[c[0]].srcRelation == rel)
-        {
-          cycle.insert(std::end(cycle), c.begin(), c.end());
-          return;
-        }
-      }
-    }
-
-    vector<int> empt;
-    vector<int>& getCycleForRel(Expr rel)
-    {
-      for (auto & c : cycles)
-        if (chcs[c[0]].srcRelation == rel)
-          return c;
-      return empt;
-    }
-
-    void remCycleForRel(Expr rel)
-    {
-      for (int i = cycles.size() - 1; i >= 0; i--)
-      {
-        auto c = cycles[i];
-        if (chcs[c[0]].srcRelation == rel)
-        {
-          cycles.erase(cycles.begin()+i);
-          prefixes.erase(prefixes.begin()+i);
-        }
-      }
-    }
-
-    vector<int>& getCycleForRel(int chcNum)
-    {
-      return getCycleForRel(chcs[chcNum].srcRelation);
-    }
-
-    void remCycleForRel(int chcNum)
-    {
-      remCycleForRel(chcs[chcNum].srcRelation);
-    }
-
-    HornRuleExt* getNestedRel (Expr rel)
-    {
-      vector<int> cycle;
-      getCycleForRel(rel, cycle);
-      if (cycle.size() > 0 && !chcs[cycle[0]].isInductive)
-        return &chcs[cycle[0]];
-      else
-        return NULL;
-    }
-
-    HornRuleExt* getFirstRuleOutside (Expr rel)
-    {
-      for (auto & c : cycles)
-      {
-        if (chcs[c[0]].srcRelation == rel)
-        {
-          for (auto & a : outgs[rel])
-          {
-            if (a != c.back()) return &chcs[a];
-          }
-        }
-      }
-      return NULL;
+      Expr rel = cyclesIt->first;
+      cyclesIt++;
+      if (cyclesIt == cycles.end()) cyclesIt = cycles.begin();
+      return rel;
     }
 
     void addRule (HornRuleExt* r)
@@ -1082,68 +1162,6 @@ namespace ufo
     {
       Expr tmp = keepQuantifiers(hr->body, hr->srcVars);
       return weakenForHardVars(tmp, hr->srcVars);
-    }
-
-    void wtoSort()
-    {
-      hasCycles();
-      if (wtoCHCs.size() > 0)
-      {
-        outs () << "Already sorted\n";
-        return;
-      }
-
-      int r1 = 0;
-
-      for (auto & c : cycles)
-      {
-        unique_push_back(chcs[c[0]].srcRelation, wtoDecls);
-        for (int i = 1; i < c.size(); i++)
-        {
-          unique_push_back(chcs[c[i]].dstRelation, wtoDecls);
-          unique_push_back(&chcs[c[i]], wtoCHCs);
-        }
-      }
-
-      int r2 = wtoDecls.size();
-      if (r2 == 0) return;
-
-      while (r1 != r2)
-      {
-        for (int i = r1; i < r2; i++)
-        {
-          auto dcl = wtoDecls[i];
-          for (auto &hr : chcs)
-          {
-            if (find(wtoCHCs.begin(), wtoCHCs.end(), &hr) != wtoCHCs.end()) continue;
-
-            if (hr.srcRelation == dcl)
-            {
-              unique_push_back(hr.dstRelation, wtoDecls);
-              unique_push_back(&hr, wtoCHCs);
-            }
-            else if (hr.dstRelation == dcl)
-            {
-              unique_push_back(hr.srcRelation, wtoDecls);
-              unique_push_back(&hr, wtoCHCs);
-            }
-          }
-        }
-        r1 = r2;
-        r2 = wtoDecls.size();
-      }
-
-      if (wtoCHCs.size() != chcs.size())
-      {
-        errs() << "WARNING: Possible bug with WTO sorting\n"; // GF: to fix
-      }
-
-      // filter wtoDecls
-      for (auto it = wtoDecls.begin(); it != wtoDecls.end();)
-      {
-        if (*it == failDecl || isOpX<TRUE>(*it)) it = wtoDecls.erase(it);
-        else ++it;
-      }
     }
 
     // Transformations
@@ -1278,11 +1296,18 @@ namespace ufo
       return success;
     }
 
-    void print (bool full = false)
+    void print (bool full = false, bool dump_cfg = false)
     {
+      std::ofstream enc_chc;
+      if (dump_cfg)
+      {
+        enc_chc.open("chc.dot");
+        enc_chc <<("digraph print {\n");
+      }
       for (int i = 0; i < chcs.size(); i++)
       {
-        if (find(toEraseChcs.begin(), toEraseChcs.end(), i) != toEraseChcs.end()) continue;
+        if (find(toEraseChcs.begin(), toEraseChcs.end(), i) != toEraseChcs.end())
+          continue;
         auto & hr = chcs[i];
         if (full)
         {
@@ -1297,7 +1322,7 @@ namespace ufo
         {
           outs () << " (";
           pprint(hr.srcVars);
-          outs () << "\b\b)";
+          outs () << ")";
         }
         else outs () << "[#" << hr.srcVars.size() << "]";
         outs () << " -> " << * hr.dstRelation;
@@ -1306,7 +1331,7 @@ namespace ufo
         {
           outs () << " (";
           pprint(hr.dstVars);
-          outs () << "\b\b)";
+          outs () << ")";
         }
         else outs () << "[#" << hr.dstVars.size() << "]";
         if (full)
@@ -1317,6 +1342,20 @@ namespace ufo
           else outs () << " < . . . . too large . . . . >\n";
         }
         else outs() << "\n";
+        if (dump_cfg)
+        {
+          enc_chc << " \"" << hr.srcRelation;
+          enc_chc << "\" -> ";
+          enc_chc << "\"" << hr.dstRelation;
+          enc_chc << "\"\n";
+        }
+      }
+      if (dump_cfg)
+      {
+        enc_chc <<("}");
+        enc_chc.close();
+        // this needs a graphiz package installed:
+        // system("dot -Tpdf -o chc.pdf chc.dot");
       }
     }
   };

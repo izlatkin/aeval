@@ -9,7 +9,7 @@ using namespace std;
 using namespace boost;
 namespace ufo
 {
-  
+
   class SMTUtils {
   private:
 
@@ -102,7 +102,7 @@ namespace ufo
 
     template <typename T> boost::tribool isSat(T& cnjs, bool reset=true)
     {
-      allVars.clear();
+      if (!reset) allVars.clear();
       if (m != NULL) { free(m); m = NULL; }
       if (reset) smt.reset();
       for (auto & c : cnjs)
@@ -663,7 +663,7 @@ namespace ufo
 //      outs().flush ();
     }
   };
-  
+
   /**
    * Horn-based interpolation over particular vars
    */

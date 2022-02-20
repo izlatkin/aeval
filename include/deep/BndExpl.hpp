@@ -51,7 +51,7 @@ namespace ufo
     BndExpl (CHCs& r, Expr lms, bool d = false) :
       m_efac(r.m_efac), ruleManager(r), u(m_efac), extraLemmas(lms), debug(d) {}
 
-    map<Expr, ExprSet> concrInvs;
+    // map<Expr, ExprSet> concrInvs;
     void setInvs(ExprMap& i) {invs = i;}
 
     void guessRandomTrace(vector<int>& trace)
@@ -66,31 +66,6 @@ namespace ufo
         int chcId = ruleManager.outgs[curRel][chosen];
         curRel = ruleManager.chcs[chcId].dstRelation;
         trace.push_back(chcId);
-      }
-    }
-
-    void getAllTraces (Expr src, Expr dst, int len, vector<int> trace, vector<vector<int>>& traces)
-    {
-      if (len == 1)
-      {
-        for (auto a : ruleManager.outgs[src])
-        {
-          if (ruleManager.chcs[a].dstRelation == dst)
-          {
-            vector<int> newtrace = trace;
-            newtrace.push_back(a);
-            traces.push_back(newtrace);
-          }
-        }
-      }
-      else
-      {
-        for (auto a : ruleManager.outgs[src])
-        {
-          vector<int> newtrace = trace;
-          newtrace.push_back(a);
-          getAllTraces(ruleManager.chcs[a].dstRelation, dst, len-1, newtrace, traces);
-        }
       }
     }
 
@@ -145,40 +120,46 @@ namespace ufo
       return unsat;
     }
 
-    Expr compactPrefix (int num, int unr = 0)
+    Expr compactPrefix (Expr r, int unr = 0)
     {
-      vector<int> pr = ruleManager.prefixes[num];
+      vector<int> pr = ruleManager.getPrefix(r);    // to extend
       if (pr.size() == 0) return mk<TRUE>(m_efac);
-
-      for (int j = pr.size() - 1; j >= 0; j--)
+      for (int j = pr.size() - 2; j >= 0; j--)
       {
-        vector<int>& tmp = ruleManager.getCycleForRel(pr[j]);
+        Expr rel = ruleManager.chcs[pr[j]].dstRelation;
+        vector<int>& tmp = ruleManager.cycles[rel][0];   // to extend
         for (int i = 0; i < unr; i++)
-          pr.insert(pr.begin() + j, tmp.begin(), tmp.end());
+          pr.insert(pr.begin() + (j + 1), tmp.begin(), tmp.end());
       }
 
-      pr.push_back(ruleManager.cycles[num][0]);   // we are interested in prefixes, s.t.
-                                                  // the cycle is reachable
+      pr.insert(pr.end(), ruleManager.cycles[r][0].begin(), ruleManager.cycles[r][0].end());
+
       ExprVector ssa;
       getSSA(pr, ssa);
-      if (!(bool)u.isSat(ssa))
+      if (false == u.isSat(ssa))
       {
         if (unr > 10)
         {
           do {ssa.erase(ssa.begin());}
           while (!(bool)u.isSat(ssa));
         }
-        else return compactPrefix(num, unr+1);
+        else return compactPrefix(r, unr+1);
       }
 
       if (ssa.empty()) return mk<TRUE>(m_efac);
 
-      ssa.pop_back();                              // remove the cycle from the formula
-      bindVars.pop_back();                         // and its variables
+      if (ssa.size() <= ruleManager.cycles[r][0].size())
+        return mk<TRUE>(m_efac);
+
+      for (int i = 0; i < ruleManager.cycles[r][0].size(); i ++)
+      {
+        ssa.pop_back();                            // remove the cycle from the formula
+        bindVars.pop_back();                       // and its variables
+      }
       Expr pref = conjoin(ssa, m_efac);
       pref = rewriteSelectStore(pref);
       pref = keepQuantifiersRepl(pref, bindVars.back());
-      return replaceAll(pref, bindVars.back(), ruleManager.chcs[ruleManager.cycles[num][0]].srcVars);
+      return replaceAll(pref, bindVars.back(), ruleManager.invVars[r]);
     }
 
     vector<ExprVector> bindVars;
@@ -398,11 +379,13 @@ namespace ufo
                 {
                   printTest();
 
-                  // try the lookahead method
-
-                  Expr mdl = replaceAll(u.getModel(bindVars.back()), bindVars.back(), ruleManager.invVars[hr.dstRelation]);
-                  outs () << "found: " << mdl << "\n";
-                  letItRun(mdl, hr.dstRelation, todoCHCs, toErCHCs, lookahead, kVersVals.back());
+                  // try the lookahead method: to fix or remove
+                  if (lookahead > 0)
+                  {
+                    Expr mdl = replaceAll(u.getModel(bindVars.back()), bindVars.back(), ruleManager.invVars[hr.dstRelation]);
+                    outs () << "found: " << mdl << "\n";
+                    letItRun(mdl, hr.dstRelation, todoCHCs, toErCHCs, lookahead, kVersVals.back());
+                  }
                 }
               }
               // default
@@ -412,7 +395,7 @@ namespace ufo
             {
 //              outs () << "     finding happy ending = " << suff;
               vector<vector<int>> tracesSuf;
-              getAllTraces(hr.dstRelation, ruleManager.failDecl, suff++, vector<int>(), tracesSuf);
+              ruleManager.getAllTraces(hr.dstRelation, ruleManager.failDecl, suff++, vector<int>(), tracesSuf);
 //              outs () << "    (" << tracesSuf.size() << ")\n";
               for (auto tr : tracesSuf)
               {
@@ -486,84 +469,53 @@ namespace ufo
       }
     }
 
-    bool exploreTraces(int cur_bnd, int bnd, bool print = false)
+    tribool exploreTraces(int cur_bnd, int bnd, bool print = false)
     {
-      bool unsat = true;
-      int num_traces = 0;
-
-      while (unsat && cur_bnd <= bnd)
+      if (ruleManager.chcs.size() == 0)
       {
+        if (debug) outs () << "CHC system is empty\n";
+        if (print) outs () << "Success after complete unrolling\n";
+        return false;
+      }
+      if (!ruleManager.hasCycles())
+      {
+        if (debug) outs () << "CHC system does not have cycles\n";
+        bnd = ruleManager.chcs.size();
+      }
+      tribool res = indeterminate;
+      while (cur_bnd <= bnd)
+      {
+        if (debug)
+        {
+          outs () << ".";
+          outs().flush();
+        }
         vector<vector<int>> traces;
-
-        getAllTraces(mk<TRUE>(m_efac), ruleManager.failDecl, cur_bnd++, vector<int>(), traces);
-
+        ruleManager.getAllTraces(mk<TRUE>(m_efac), ruleManager.failDecl, cur_bnd++, vector<int>(), traces);
+        bool toBreak = false;
         for (auto &a : traces)
         {
-          num_traces++;
-          unsat = bool(!u.isSat(toExpr(a)));
-          if (!unsat) break;
+          Expr ssa = toExpr(a);
+          res = u.isSat(ssa);
+          if (res || indeterminate (res))
+          {
+            if (debug) outs () << "\n";
+            toBreak = true;
+            break;
+          }
         }
+        if (toBreak) break;
       }
 
-      if (print)
+      if (debug || print)
       {
-        if (unsat)
-          outs () << "Success after complete unrolling (" << (cur_bnd - 1)<< " step)\n";
+        if (indeterminate(res)) outs () << "unknown\n";
+        else if (res) outs () << "Counterexample of length " << (cur_bnd - 1) << " found\n";
+        else if (ruleManager.hasCycles())
+          outs () << "No counterexample found up to length " << cur_bnd << "\n";
         else
-          outs () << "Counterexample of length " << (cur_bnd - 1) << " found\n";
+          outs () << "Success after complete unrolling\n";
       }
-      return unsat;
-    }
-
-    bool kIndIter(int bnd1, int bnd2)
-    {
-      assert (bnd1 <= bnd2);
-      assert (bnd2 > 1);
-      bool init = exploreTraces(bnd1, bnd2);
-      if (!init)
-      {
-        outs() << "Base check failed at step " << bnd2 << "\n";
-        exit(0);
-      }
-
-      k_ind = ruleManager.chcs.size(); // == 3
-
-      for (int i = 0; i < k_ind; i++)
-      {
-        auto & r = ruleManager.chcs[i];
-        if (r.isInductive) tr_ind = i;
-        if (r.isQuery) pr_ind = i;
-      }
-
-      ruleManager.chcs.push_back(HornRuleExt());   // trick for now: a new artificial CHC
-      HornRuleExt& hr = ruleManager.chcs[k_ind];
-      HornRuleExt& tr = ruleManager.chcs[tr_ind];
-      HornRuleExt& pr = ruleManager.chcs[pr_ind];
-
-      hr.srcVars = tr.srcVars;
-      hr.dstVars = tr.dstVars;
-      hr.locVars = tr.locVars;
-
-      hr.body = mk<AND>(tr.body, mkNeg(pr.body));
-
-      if (extraLemmas != NULL) hr.body = mk<AND>(extraLemmas, hr.body);
-
-      for (int i = 0; i < hr.srcVars.size(); i++)
-      {
-        hr.body = replaceAll(hr.body, pr.srcVars[i], hr.srcVars[i]);
-      }
-
-      vector<int> gen_trace;
-      for (int i = 1; i < bnd2; i++) gen_trace.push_back(k_ind);
-      gen_trace.push_back(pr_ind);
-      Expr q = toExpr(gen_trace);
-      bool res = bool(!u.isSat(q));
-
-      if (bnd2 == 2) inv = mkNeg(pr.body);
-
-      // prepare for the next iteration
-      ruleManager.chcs.erase (ruleManager.chcs.begin() + k_ind);
-
       return res;
     }
 
@@ -682,11 +634,13 @@ namespace ufo
       str = str.substr(0, str.find('.'));
       cpp_int max_double = lexical_cast<cpp_int>(str);
 
-      for (int cyc = 0; cyc < ruleManager.cycles.size(); cyc++)
+      for (auto & a : ruleManager.cycles)
+      {
+      for (int cyc = 0; cyc < a.second.size(); cyc++)
       {
         vector<int> mainInds;
         vector<int> arrInds;
-        auto & loop = ruleManager.cycles[cyc];
+        auto & loop = a.second[cyc];
         if (srcRel != ruleManager.chcs[loop[0]].srcRelation) continue;
         if (models.size() > 0) continue;
 
@@ -714,7 +668,7 @@ namespace ufo
           continue; // does not make much sense to run with only one var when it is the last cycle
         srcVars = vars;
 
-        auto & prefix = ruleManager.prefixes[cyc];
+        auto prefix = ruleManager.getPrefix(srcRel);
         vector<int> trace;
         int l = 0;                              // starting index (before the loop)
         if (ruleManager.hasArrays[srcRel]) l++; // first iter is usually useless
@@ -730,7 +684,6 @@ namespace ufo
                   replaceAll(invs, ruleManager.chcs[loop.back()].dstVars, bindVars[loop.size() - 1])));
         ssa.push_back(
                   replaceAll(splitter, ruleManager.chcs[loop[0]].srcVars, bindVars[loop.size() - 1]));
-
 
         bindVars.pop_back();
         int traceSz = trace.size();
@@ -775,6 +728,7 @@ namespace ufo
           for (auto i: splitterVarsIndex)
           {
             Expr srcVar = ruleManager.chcs[loop[0]].srcVars[i];
+            if (containsOp<ARRAY_TY>(srcVar)) continue;
             Expr bvar = versVars[j][i];
             if (isOpX<SELECT>(bvar)) bvar = bvar->left();
             Expr m = allModels[bvar];
@@ -809,13 +763,13 @@ namespace ufo
               }
               model.push_back(value);
               if (debug) outs () << *bvar << " = " << *m << ", ";
-              if (j == 0)
-              {
-                if (isOpX<SELECT>(bvar))
-                  concrInvs[srcRel].insert(mk<EQ>(vars[i]->left(), allModels[bvar->left()]));
-                else
-                  concrInvs[srcRel].insert(mk<EQ>(vars[i], m));
-              }
+              // if (j == 0)
+              // {
+              //   if (isOpX<SELECT>(bvar))
+              //     concrInvs[srcRel].insert(mk<EQ>(vars[i]->left(), allModels[bvar->left()]));
+              //   else
+              //     concrInvs[srcRel].insert(mk<EQ>(vars[i], m));
+              // }
             }
             if (!toSkip) models.push_back(model);
           }
@@ -825,6 +779,7 @@ namespace ufo
           }
           if (debug) outs () << "\b\b]\n";
         }
+      }
       }
 
       return true;
@@ -843,11 +798,13 @@ namespace ufo
       map<int, bool> chcsConsidered;
       map<int, Expr> exprModels;
 
-      for (int cyc = 0; cyc < ruleManager.cycles.size(); cyc++)
+      for (auto & a : ruleManager.cycles)
+      {
+      for (int cyc = 0; cyc < a.second.size(); cyc++)
       {
         vector<int> mainInds;
         vector<int> arrInds;
-        auto & loop = ruleManager.cycles[cyc];
+        auto & loop = a.second[cyc];
         Expr srcRel = ruleManager.chcs[loop[0]].srcRelation;
         if (models[srcRel].size() > 0) continue;
 
@@ -875,7 +832,7 @@ namespace ufo
           continue; // does not make much sense to run with only one var when it is the last cycle
         srcVars[srcRel] = vars;
 
-        auto & prefix = ruleManager.prefixes[cyc];
+        auto prefix = ruleManager.getPrefix(srcRel);
         vector<int> trace;
         Expr lastModel = mk<TRUE>(m_efac);
 
@@ -1020,8 +977,8 @@ namespace ufo
           }
         }
 
-        for (auto & a : ms)
-          concrInvs[srcRel].insert(simplifyArithm(disjoin(a.second, m_efac)));
+        // for (auto & a : ms)
+        //   concrInvs[srcRel].insert(simplifyArithm(disjoin(a.second, m_efac)));
 
         // although we care only about integer variables for the matrix above,
         // we still keep the entire model to bootstrap the model generation for the next loop
@@ -1035,28 +992,80 @@ namespace ufo
             bindVars.back(), ruleManager.chcs[trace.back()].srcVars);
         }
       }
-
+      }
       return true;
     }
 
-    bool getTest()
+    bool findTest(map<int, ExprVector> & newTest)
     {
-      map<int, ExprVector> tmp;
+      // kVersVals : vector<map<int, ExprVector> >
+      for (auto & a : kVersVals)
+      {
+        // a : map<int, ExprVector>
+        bool allTrue = true;
+        for (auto & b : a)
+        {
+          if (b.second.size() == newTest[b.first].size())
+          {
+            for (int i = 0; i < b.second.size(); i++)
+            {
+              if (b.second[i] != newTest[b.first][i])
+              {
+                allTrue = false;
+                break;
+              }
+            }
+          }
+          else allTrue = false;
+          if (!allTrue) break;
+        }
+        if (allTrue)
+        {
+          if (debug) outs () << "test already generated\n";
+          return true;
+        }
+      }
+      return false;
+    }
+
+    bool getTest(bool tryAgain = true, int threshold = 50)
+    {
+      if (!tryAgain) outs () << "smaller model found\n";
+      map<int, ExprVector> newTest;
+      ExprVector extra;
+      ExprVector toCmp;
+      Expr ten = mkMPZ(threshold, m_efac);
       for (auto k : kVers)
         for (auto & a : k.second)
         {
           Expr val = u.getModel(a);
           if (val == a) val = mkMPZ(0, m_efac);
           assert (isNumeric(val) || isBoolean(val));
-          tmp[k.first].push_back(val);
+
+          // heuristic to get small models
+          if (tryAgain && isNumeric(val) && lexical_cast<cpp_int>(val) > threshold)
+            extra.push_back(mk<LT>(a, ten));
+          toCmp.push_back(mk<EQ>(a, val));
+          newTest[k.first].push_back(val);
         }
 
-      if (find(kVersVals.begin(), kVersVals.end(), tmp) == kVersVals.end())
+        // outs () << "cur model:\n";
+        // pprint(toCmp, 3);
+
+      if (extra.size() > 0)
+        if (true == u.isSat(conjoin(extra, m_efac), false))
+          return getTest(false, threshold);
+
+      if (findTest(newTest)) return false;
+
+      kVersVals.push_back(newTest);
+      if (debug)
       {
-        kVersVals.push_back(tmp);
-        return true;
+        outs () << "adding new test case:";
+        pprint(toCmp);
+        outs () << "\n";
       }
-      return false;
+      return true;
     }
 
     void printTest()
@@ -1075,8 +1084,8 @@ namespace ufo
       testfile << "void print_value(int v){\n";
       testfile << "    FILE* f = fopen(\"number.txt\", \"a\");\n";
       testfile << "    if (f != NULL){\n";
-      testfile << "    fprintf(f, \"%d \", v); \n";
-      testfile << "    fclose(f); f = NULL;\n";
+      testfile << "      fprintf(f, \"%d \", v); \n";
+      testfile << "      fclose(f); f = NULL;\n";
       testfile << "    }\n";
       testfile << "}\n";
       for (auto k : mKeys)
@@ -1107,51 +1116,14 @@ namespace ufo
     }
   };
 
-  inline void unrollAndCheck(string smt, int bnd1, int bnd2)
+  inline void unrollAndCheck(string smt, int bnd1, int bnd2, int to, bool skip_elim, int debug)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
-    CHCs ruleManager(m_efac, z3);
-    ruleManager.parse(smt);
-    BndExpl ds(ruleManager, false);
-    ds.exploreTraces(bnd1, bnd2, true);
-  };
-
-  inline bool kInduction(CHCs& ruleManager, int bnd)
-  {
-    if (ruleManager.chcs.size() != 3)
-    {
-      outs () << "currently not supported\n";
-      return false;
-    }
-
-    BndExpl ds(ruleManager, false);
-
-    bool success = false;
-    int i;
-    for (i = 2; i < bnd; i++)
-    {
-      if (ds.kIndIter(i, i))
-      {
-        success = true;
-        break;
-      }
-    }
-
-    outs () << "\n" <<
-      (success ? "K-induction succeeded " : "Unknown result ") <<
-      "after " << (i-1) << " iterations\n";
-
-    return success;
-  };
-
-  inline void kInduction(string smt, int bnd)
-  {
-    ExprFactory m_efac;
-    EZ3 z3(m_efac);
-    CHCs ruleManager(m_efac, z3);
-    ruleManager.parse(smt);
-    kInduction(ruleManager, bnd);
+    CHCs ruleManager(m_efac, z3, debug);
+    if (!ruleManager.parse(smt, !skip_elim)) return;
+    BndExpl bnd(ruleManager, to, debug);
+    bnd.exploreTraces(bnd1, bnd2, true);
   };
 }
 

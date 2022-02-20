@@ -129,8 +129,7 @@ namespace ufo
 
     void addPropagatedArrayCands(Expr rel, int invNum, Expr candToProp)
     {
-      vector<int> tmp;
-      ruleManager.getCycleForRel(rel, tmp);
+      vector<int> tmp = ruleManager.cycles[rel][0];   // todo: extend
       if (tmp.size() != 1) return; // todo: support
 
       Expr fls = candToProp->last()->right();
@@ -574,7 +573,7 @@ namespace ufo
 
     void deferredPriorities()
     {
-      for (auto & dcl: ruleManager.wtoDecls)
+      for (auto & dcl: ruleManager.loopheads)
       {
         int invNum = getVarIndex(dcl, decls);
         SamplFactory& sf = sfs[invNum].back();
@@ -607,8 +606,8 @@ namespace ufo
       return im;
     }
 
-    bool synthesizeDisjLemmas(int invNum, int cycleNum, Expr rel,
-                              Expr cnd, Expr splitter, Expr ind, unsigned depth, Expr lastModel = NULL)
+    bool synthesizeDisjLemmas(int invNum, Expr rel, Expr cnd, Expr splitter,
+                              Expr ind, unsigned depth, Expr lastModel = NULL)
     {
       if (printLog >= 2) outs () << "  Try finding splitter for " << cnd << "\n";
       if (dCandNum++ == dAttNum || depth == dDepNum) return true;
@@ -616,7 +615,7 @@ namespace ufo
 
       if (isOpX<FORALL>(cnd)) cnd = replaceArrRangeForIndCheck (invNum, cnd);
 
-      vector<int>& cycle = ruleManager.cycles[cycleNum];
+      vector<int>& cycle = ruleManager.cycles[rel][0];  // todo: extend
       ExprVector& srcVars = ruleManager.chcs[cycle[0]].srcVars;
       ExprVector& dstVars = ruleManager.chcs[cycle.back()].dstVars;
       Expr cndPrime = replaceAll(cnd, srcVars, dstVars);
@@ -745,7 +744,7 @@ namespace ufo
             getConj(newCand, cands[rel]);
         }
 
-        Expr nextModel;
+        // Expr nextModel;
         ExprSet qfInvs, candsToDat; //, se;
         if (dAddDat)
         {
@@ -770,7 +769,7 @@ namespace ufo
                 candToDat = replaceAll(candToDat, srcVars[i], dstVars[i]);
             candsToDat.insert(candToDat);
           }
-          nextModel = getDataCandidates(cands, rel, mkNeg(mbp), conjoin(candsToDat, m_efac));
+          getDataCandidates(cands, rel, mkNeg(mbp), conjoin(candsToDat, m_efac));
         }
 
         // postprocess behavioral arrCands
@@ -789,7 +788,7 @@ namespace ufo
         for (auto & c : cands[rel])
         {
           if (isOpX<FORALL>(cnd) && !isOpX<FORALL>(c)) continue;
-          synthesizeDisjLemmas(invNum, cycleNum, rel, c, mk<AND>(splitter, mkNeg(mbp)), ind, depth + 1, nextModel);
+          synthesizeDisjLemmas(invNum, rel, c, mk<AND>(splitter, mkNeg(mbp)), ind, depth + 1);
         }
       }
       return true;
@@ -807,10 +806,7 @@ namespace ufo
       for (int i = 0; i < maxAttempts; i++)
       {
         // next cand (to be sampled)
-        // TODO: find a smarter way to calculate; make parametrizable
-        int cycleNum = i % ruleManager.cycles.size();
-        int tmp = ruleManager.cycles[cycleNum][0];
-        Expr rel = ruleManager.chcs[tmp].srcRelation;
+        Expr rel = ruleManager.getNextCycle();
         int invNum = getVarIndex(rel, decls);
         candidates.clear();
         SamplFactory& sf = sfs[invNum].back();
@@ -834,7 +830,7 @@ namespace ufo
         {
           dCandNum = 0;
           lemma_found = true;
-          synthesizeDisjLemmas(invNum, cycleNum, rel, cand, mk<TRUE>(m_efac), mk<TRUE>(m_efac), 0);
+          synthesizeDisjLemmas(invNum, rel, cand, mk<TRUE>(m_efac), mk<TRUE>(m_efac), 0);
           multiHoudini(ruleManager.wtoCHCs);
           if (printLog) outs () << "\n";
         }
@@ -1026,8 +1022,8 @@ namespace ufo
         else
         {
           p = weakenForVars(p, dstVars);
-          addAllStrengthenings(p, cands);
-//          getConj(p, cands);
+          // addAllStrengthenings(p, cands);   // GF: to debug
+          getConj(p, cands);
         }
         p = simplifyArithm(p);
         mbps[invNum].insert(p);
@@ -1071,9 +1067,10 @@ namespace ufo
         retrieveDeltas(ssa, srcVars, dstVars, cands);
         generateMbps(invNum, ssa, srcVars, dstVars, cands);     // collect and add mbps as candidates
       }
+
       SamplFactory& sf = sfs[invNum].back();
       ExprSet candsFromCode, tmpArrAccess, tmpArrSelects, tmpArrCands, tmpArrFuns;
-      bool analyzedExtras, isFalse, hasArrays = false;
+      bool analyzedExtras = false, isFalse = false, hasArrays = false;
 
       for (auto &hr : ruleManager.chcs)
       {
@@ -1090,7 +1087,6 @@ namespace ufo
         for (auto &cand : sm.candidates) candsFromCode.insert(cand);
         for (auto &a : sm.intConsts) progConsts.insert(a);
         for (auto &a : sm.intCoefs) intCoefs.insert(a);
-
         // for arrays
         if (ruleManager.hasArrays[invRel])
         {
@@ -1280,8 +1276,6 @@ namespace ufo
           {
             dl.computeData(srcRel, splitter, invs);
             dl.computePolynomials(dcl, poly[dcl]);
-            for (auto & a : dl.getConcrInvs(dcl)) cands[dcl].insert(a);
-            model = conjoin(dl.getConcrInvs(srcRel), m_efac);
             break;
           }
         }
@@ -1379,7 +1373,6 @@ namespace ufo
     {
       if (printLog) outs () << "\nBOOTSTRAPPING\n=============\n";
       filterUnsat();
-
       if (multiHoudini(ruleManager.wtoCHCs))
       {
         assignPrioritiesForLearned();
@@ -1397,7 +1390,7 @@ namespace ufo
       // try array candidates one-by-one (adapted from `synthesize`)
       // TODO: batching
       bool arrs = false;
-      for (auto & dcl: ruleManager.wtoDecls)
+      for (auto & dcl: ruleManager.loopheads)
       {
         if (ruleManager.hasArrays[dcl])
         {
@@ -1557,11 +1550,11 @@ namespace ufo
     }
 
     // it used to be called initArrayStuff, but now it does more stuff than just for arrays
-    void initializeAux(BndExpl& bnd, int cycleNum, Expr pref)
+    void initializeAux(Expr rel, BndExpl& bnd, int cycleNum, Expr pref)
     {
-      vector<int>& cycle = ruleManager.cycles[cycleNum];
+      vector<int>& cycle = ruleManager.cycles[rel][cycleNum];
       HornRuleExt* hr = &ruleManager.chcs[cycle[0]];
-      Expr rel = hr->srcRelation;
+      assert(rel == hr->srcRelation);
       ExprVector& srcVars = hr->srcVars;
       ExprVector& dstVars = ruleManager.chcs[cycle.back()].dstVars;
       assert(srcVars.size() == dstVars.size());
@@ -1571,7 +1564,6 @@ namespace ufo
       prefs[invNum] = pref;
       Expr e = bnd.toExpr(cycle);
       ssas[invNum] = replaceAll(e, bnd.bindVars.back(), dstVars);
-
       return; // currently skip arrays
 
       if (qvits[invNum].size() > 0) return;
@@ -1672,26 +1664,29 @@ namespace ufo
         RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, 1, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
 
         map<Expr, ExprSet> cands;
-        for (int i = 0; i < ruleManager.cycles.size(); i++)
+        for (auto & a : ruleManager.cycles)
         {
-          Expr dcl = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
-          if (ds.initializedDecl(dcl)) continue;
-          ds.initializeDecl(dcl);
-          if (invMode == 1) continue;
-          Expr pref = bnd.compactPrefix(i);
-          ExprSet tmp;
-          getConj(pref, tmp);
-          for (auto & t : tmp)
-            if (hasOnlyVars(t, ruleManager.invVars[dcl]))
-              cands[dcl].insert(t);
+          Expr dcl = a.first;
+          for (int i = 0; i < a.second.size(); i++)
+          {
+            if (ds.initializedDecl(dcl)) continue;
+            ds.initializeDecl(dcl);
+            if (invMode == 1) continue;
+            Expr pref = bnd.compactPrefix(dcl);
+            ExprSet tmp;
+            getConj(pref, tmp);
+            for (auto & t : tmp)
+              if (hasOnlyVars(t, ruleManager.invVars[dcl]))
+                cands[dcl].insert(t);
 
-          ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
-          ds.initializeAux(bnd, i, pref);
+            ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
+            ds.initializeAux(dcl, bnd, i, pref);
+          }
         }
 
         if (enableDataLearning) ds.getDataCandidates(cands);
 
-        for (auto & dcl: ruleManager.wtoDecls)
+        for (auto & dcl: ruleManager.loopheads)
         {
           for (int i = 0; i < doProp; i++)
           for (auto & a : cands[dcl]) ds.propagate(dcl, a, true);
@@ -1700,12 +1695,11 @@ namespace ufo
         }
 
         ds.bootstrap(doDisj);
-        if (invMode == 2)
-          ds.synthesize(maxAttempts, doDisj);
+        ds.synthesize(maxAttempts, doDisj);
         ds.getInvs(invs);
 
         ruleManager.propagateInvs(invs);
-        ruleManager.reParse();
+        ruleManager.reParse(true);
 
         // for sanity check (can be removed):
         {
@@ -1745,7 +1739,7 @@ namespace ufo
     ExprFactory m_efac;
     EZ3 z3(m_efac);
 
-    CHCs ruleManager(m_efac, z3);
+    CHCs ruleManager(m_efac, z3, debug);
     ruleManager.parse(smt, doElim);
     BndExpl bnd(ruleManager, debug);
     if (!ruleManager.hasCycles())
@@ -1757,28 +1751,32 @@ namespace ufo
     RndLearnerV3 ds(m_efac, z3, ruleManager, to, freqs, aggp, 0, dAllMbp, dAddProp, dAddDat, dStrenMbp, debug);
 
     map<Expr, ExprSet> cands;
-    for (int i = 0; i < ruleManager.cycles.size(); i++)
+    for (auto & a : ruleManager.cycles)
     {
-      Expr dcl = ruleManager.chcs[ruleManager.cycles[i][0]].srcRelation;
-      if (ds.initializedDecl(dcl)) continue;
-      ds.initializeDecl(dcl);
-      Expr pref = bnd.compactPrefix(i);
-      ExprSet tmp;
-      getConj(pref, tmp);
-      for (auto & t : tmp)
-        if (hasOnlyVars(t, ruleManager.invVars[dcl]))
-          cands[dcl].insert(t);
+      Expr dcl = a.first;
+      for (int i = 0; i < a.second.size(); i++)
+      {
+        if (ds.initializedDecl(dcl)) continue;
+        ds.initializeDecl(dcl);
+        Expr pref = bnd.compactPrefix(dcl);
+        ExprSet tmp;
+        getConj(pref, tmp);
+        for (auto & t : tmp)
+          if (hasOnlyVars(t, ruleManager.invVars[dcl]))
+            cands[dcl].insert(t);
 
-      ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
-      ds.initializeAux(bnd, i, pref);
+        ds.mutateHeuristicEq(cands[dcl], cands[dcl], dcl, true);
+        ds.initializeAux(dcl, bnd, i, pref);
+      }
     }
 
     if (enableDataLearning) ds.getDataCandidates(cands);
 
-    for (auto & dcl: ruleManager.wtoDecls)
+    for (auto & dcl: ruleManager.loopheads)
     {
       for (int i = 0; i < doProp; i++)
-        for (auto & a : cands[dcl]) ds.propagate(dcl, a, true);
+        for (auto & a : cands[dcl])
+          ds.propagate(dcl, a, true);
       ds.addCandidates(dcl, cands[dcl]);
       ds.prepareSeeds(dcl, cands[dcl]);
     }

@@ -200,58 +200,6 @@ namespace ufo
       for (auto & sf : sfs) sf.back().learnedExprs.clear();
     }
 
-    bool checkWithKInduction()
-    {
-      if (ruleManager.chcs.size() != 3) return false; // current limitation
-      if (sfs.size() != 1) return false;              // current limitation
-      if (kind_succeeded) return false;
-
-      Expr cand = curCandidates[0];
-      if (isOpX<TRUE>(cand)) return false;
-
-      SamplFactory& sf = sfs[0].back();
-      Expr allLemmas = sf.getAllLemmas();
-
-      // get lemmas to be included to inductive rule
-      for (int i = 0; i < ruleManager.chcs.size(); i++)
-      {
-        auto & hr = ruleManager.chcs[i];
-        if (!hr.isInductive) continue;
-
-        for (auto & v : invarVars[0])
-        {
-          allLemmas = replaceAll(allLemmas, v.second, hr.srcVars[v.first]);
-        }
-      }
-
-      BndExpl bnd(ruleManager, allLemmas, printLog);
-
-      int i;
-      for (i = 2; i < 5; i++) // 2 - a reasanoble lowerbound, 5 - a hardcoded upperbound
-      {
-        kind_succeeded = bnd.kIndIter(i, i);
-        numOfSMTChecks += i;
-        if (kind_succeeded) break;
-      }
-
-      if (kind_succeeded)
-      {
-        outs () << "\n" << "K-induction succeeded after " << (i-1) << " iterations\n";
-        oneInductiveProof = (i == 2);
-        if (oneInductiveProof) // can complete the invariant only when the proof is 1-inductive
-        {
-          curCandidates[0] = bnd.getInv();
-          bool addedRemainingLemma = checkCandidates() && checkSafety();
-          if (addedRemainingLemma) sf.learnedExprs.insert(curCandidates[0]); // for serialization only
-
-          if (printLog) outs () << "remaining lemma(s): " << *curCandidates[0] <<
-                 "\nsanity check: " << addedRemainingLemma << "\n";
-        }
-      }
-
-      return kind_succeeded;
-    }
-
     void bootstrapBoundedProofs (int bnd, ExprSet& cands)
     {
       for (auto &hr: ruleManager.chcs)
@@ -620,10 +568,7 @@ namespace ufo
         if (success) break;
 
         if (isInductive)
-        {
-          success = checkWithKInduction();
           success = checkBoundedProofs(itpCands);
-        }
 
         if (success) break;
 
