@@ -2,7 +2,7 @@
 #define RNDLEARNERV3__HPP__
 
 #include "RndLearnerV2.hpp"
-#include "BndExpl.hpp"
+#include "LBExpl.hpp"
 
 #ifdef HAVE_ARMADILLO
 #include "DataLearner.hpp"
@@ -1640,9 +1640,11 @@ namespace ufo
     }
   };
 
-  inline void testgen(string smt, set<int>& nums, unsigned maxAttempts, unsigned to, bool freqs, bool aggp,
-                      bool enableDataLearning, bool doElim, bool doDisj, int doProp,
-                      bool dAllMbp, bool dAddProp, bool dAddDat, bool dStrenMbp, bool toSkip, int invMode, int lookahead, int debug)
+  inline void testgen(string smt, set<int>& nums, unsigned maxAttempts, unsigned to,
+                      bool freqs, bool aggp, bool enableDataLearning, bool doElim,
+                      bool doDisj, int doProp, bool dAllMbp, bool dAddProp, bool dAddDat,
+                      bool dStrenMbp, bool toSkip, int invMode, int lookahead,
+                      bool lb, int debug)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
@@ -1652,10 +1654,15 @@ namespace ufo
     if (invMode == 0)
     {
       ruleManager.parse(smt, 0);
-      ruleManager.reParse();
+      ruleManager.reParse(lb);
     }
     else
     {
+      if (lb)
+      {
+        outs () << "LBTG currently does not support invariants\n";
+        return;
+      }
       ruleManager.parse(smt, 2);  // used to be doElim
       if (ruleManager.cycles.size() > 0)
       {
@@ -1725,9 +1732,13 @@ namespace ufo
 
     if (nums.size() > 0)
     {
-      BndExpl bnd1(ruleManager, lookahead, false);
+      LBExpl bnd1(ruleManager, lookahead, false);
+      bnd1.initKeys(nums, lb);
       bnd1.setInvs(invs);
-      bnd1.exploreTracesTG(nums, 1, 100000, toSkip);
+      if (lb)
+        bnd1.exploreTracesLBTG(1, 1000);
+      else
+        bnd1.exploreTracesTG(1, 1000, toSkip);
     }
   }
 

@@ -39,6 +39,10 @@ namespace ufo
     Expr body;
     Expr head;
 
+    // for TG:
+    ExprVector bodies;
+    vector<int> covered;
+
     Expr srcRelation;
     Expr dstRelation;
 
@@ -67,6 +71,17 @@ namespace ufo
       for (auto it = locVars.begin(); it != locVars.end();)
         if (contains(body, *it)) ++it;
         else it = locVars.erase(it);
+    }
+
+    Expr getBody(bool last)
+    {
+      if (!last || bodies.size() <= 1) return body;
+
+      ExprSet notCovered;
+      for (int i = 0; i < bodies.size(); i++)
+        if (find(covered.begin(), covered.end(), i) == covered.end())
+          notCovered.insert(bodies[i]);
+      return disjoin(notCovered, body->getFactory());
     }
   };
 
@@ -114,7 +129,7 @@ namespace ufo
       return false;
     }
 
-    void splitBody (HornRuleExt& hr, ExprVector& srcVars, ExprSet& lin)
+    bool splitBody (HornRuleExt& hr, ExprVector& srcVars, ExprSet& lin)
     {
       getConj (simplifyBool(hr.body), lin);
       for (auto c = lin.begin(); c != lin.end(); )
@@ -129,7 +144,7 @@ namespace ufo
             errs () << "Nonlinear CHC is currently unsupported: ["
                     << *hr.srcRelation << " /\\ " << *rel->left() << " -> "
                     << *hr.dstRelation << "]\n";
-            exit(1);
+            return false;
           }
           hr.srcRelation = rel->left();
           for (auto it = cnj->args_begin()+1, end = cnj->args_end(); it != end; ++it)
@@ -138,6 +153,7 @@ namespace ufo
         }
         else ++c;
       }
+      return true;
     }
 
     void addDecl (Expr a)
@@ -255,13 +271,20 @@ namespace ufo
 
       if (debug > 0) outs () << "Reserved space for " << chcs.size() << " CHCs and " << decls.size() << " declarations\n";
 
+      bool allGood = true;
       // the second loop is needed because we want to distunguish
       // uninterpreted functions used as variables from relations to be synthesized
-      for (auto & hr : chcs)
+      for (auto it = chcs.begin(); it != chcs.end();)
       {
+        auto & hr = *it;
         ExprVector origSrcSymbs;
         ExprSet lin;
-        splitBody(hr, origSrcSymbs, lin);
+        if (!splitBody(hr, origSrcSymbs, lin))
+        {
+          it = chcs.erase(it);
+          allGood = false;
+          continue;
+        }
         if (hr.srcRelation == NULL)
         {
           if (hasUninterp(hr.body))
@@ -296,7 +319,11 @@ namespace ufo
           hr.body = u.removeITE(hr.body);
           hr.shrinkLocVars();
         }
+        ++it;
       }
+
+      if (debug > 0) outs () << "After parsing: " << chcs.size() << " CHCs and " << decls.size() << " declarations\n";
+      if (!allGood) exit(0);
 
       if (doElim >= 2)
       {
@@ -336,7 +363,7 @@ namespace ufo
       return true;
     }
 
-    void reParse(bool doElim = false)
+    void reParse(bool lb = false, bool doElim = false)
     {
       chcs = chcsOrig;
       for (auto it = redChcs.rbegin(); it != redChcs.rend(); ++it)
@@ -350,41 +377,48 @@ namespace ufo
       vector<int> toErase;
       for (int i = 0; i < sz; i++)
       {
-        if (chcs[i].isQuery) continue;
-        ExprVector vars2keep, prjcts1;
-        u.flatten(chcs[i].body, prjcts1, false, vars2keep, [](Expr a, ExprVector& b){return a;});
-        if (prjcts1.size() > 1)
+        // if (chcs[i].isQuery) continue;
+        ExprVector vars2keep;
+        u.flatten(chcs[i].body, chcs[i].bodies, false, vars2keep, [](Expr a, ExprVector& b){return a;});
+        if (!lb && chcs[i].bodies.size() > 1)
         {
+          outs () << "   " << chcs[i].srcRelation << " -> " << chcs[i].dstRelation << "\n";
           toErase.push_back(i);
-          for (auto & p : prjcts1)
+          for (auto & p : chcs[i].bodies)
           {
             auto n = chcs[i];
             n.body = p;
+            n.bodies.clear();
             chcs.push_back(n);
           }
+          chcs[i].bodies.clear();
         }
       }
 
-      for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
-        chcs.erase(chcs.begin() + *it);
+      if (!lb)
+      {
+        for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
+          chcs.erase(chcs.begin() + *it);
 
-      if (debug > 0) outs () << "Contextualized: " << chcs.size()
-                          << " CHCs and " << decls.size() << " declarations\n";
+        if (debug > 0) outs () << "Contextualized: " << chcs.size()
+                            << " CHCs and " << decls.size() << " declarations\n";
+        outgs.clear();
+        prefixes.clear();
+        cycles.clear();
 
-      outgs.clear();
-      prefixes.clear();
-      cycles.clear();
+        for (int i = 0; i < chcs.size(); i++)
+          outgs[chcs[i].srcRelation].push_back(i);
 
-      for (int i = 0; i < chcs.size(); i++)
-        outgs[chcs[i].srcRelation].push_back(i);
+        findCycles();  // maybe expensive, to optimize
 
-      if (doElim) findCycles();  // maybe expensive, to optimize
+        if (debug >= 2)
+          for (auto & d : decls){
+            outs () << "outgs from " << *d->left() << ":\n";
+            for (auto & o : outgs[d->left()])
+              outs () << "     (" << o << ")  -> " << *chcs[o].dstRelation << "\n"; }
 
-      if (debug >= 2)
-        for (auto & d : decls){
-          outs () << "outgs from " << *d->left() << ":\n";
-          for (auto & o : outgs[d->left()])
-            outs () << "     (" << o << ")  -> " << *chcs[o].dstRelation << "\n"; }
+        print(debug >= 3, true);
+      }
     }
 
     void propagateInvs(ExprMap& cands)

@@ -72,15 +72,9 @@ static inline void getNums(set<int>& nums, char * str)
 }
 
 const char *OPT_HELP = "--help";
-const char *OPT_V1 = "--v1";
-const char *OPT_V2 = "--v2";
-const char *OPT_V3 = "--v3";
 const char *OPT_MAX_ATTEMPTS = "--attempts";
 const char *OPT_TO = "--to";
-const char *OPT_K_IND = "--kind";
-const char *OPT_ITP = "--itp";
-const char *OPT_BATCH = "--batch";
-const char *OPT_RETRY = "--retry";
+const char *OPT_LB = "--lb";
 const char *OPT_ELIM = "--skip-elim";
 const char *OPT_ARITHM = "--skip-arithm";
 const char *OPT_SEED = "--inv-mode";
@@ -103,17 +97,13 @@ int main (int argc, char ** argv)
   getNums(nums, getStrValue("--keys", NULL, argc, argv));
   bool to_skip = getBoolValue("--no-term", false, argc, argv);
   int lookahead = getIntValue("--lookahead", 0, argc, argv);
-  
+  bool lb = getBoolValue(OPT_LB, false, argc, argv);
+
   // All other attrs are inherited from FreqHorn:
   int max_attempts = getIntValue(OPT_MAX_ATTEMPTS, 10, argc, argv);
   int to = getIntValue(OPT_TO, 1000, argc, argv);
-  bool kinduction = getBoolValue(OPT_K_IND, false, argc, argv);
   bool densecode = getBoolValue(OPT_GET_FREQS, false, argc, argv);
-  bool addepsilon = getBoolValue(OPT_ADD_EPSILON, false, argc, argv);
   bool aggressivepruning = getBoolValue(OPT_AGG_PRUNING, false, argc, argv);
-  int itp = getIntValue(OPT_ITP, 0, argc, argv);
-  int batch = getIntValue(OPT_BATCH, 3, argc, argv);
-  int retry = getIntValue(OPT_RETRY, 3, argc, argv);
   bool do_elim = !getBoolValue(OPT_ELIM, false, argc, argv);
   bool do_arithm = !getBoolValue(OPT_ARITHM, false, argc, argv);
   int invMode = getIntValue(OPT_SEED, 0, argc, argv);
@@ -138,6 +128,7 @@ int main (int argc, char ** argv)
   if (do_disj) do_dl = true;
 
   testgen(string(argv[argc-1]), nums, max_attempts, to, densecode, aggressivepruning,
-                     do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s, to_skip, invMode, lookahead, debug);
+                     do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s,
+                     to_skip, invMode, lookahead, lb, debug);
   return 0;
 }

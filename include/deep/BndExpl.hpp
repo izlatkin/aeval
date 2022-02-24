@@ -21,7 +21,7 @@ namespace ufo
 
   class BndExpl
   {
-    private:
+    protected:
 
     ExprFactory &m_efac;
     SMTUtils u;
@@ -163,6 +163,7 @@ namespace ufo
     }
 
     vector<ExprVector> bindVars;
+    map<int, ExprVector> bindLocVars;
 
     Expr toExpr(vector<int>& trace)
     {
@@ -175,6 +176,7 @@ namespace ufo
     {
       ExprVector bindVars2;
       bindVars.clear();
+      bindLocVars.clear();
       ExprVector bindVars1 = ruleManager.chcs[trace[0]].srcVars;
       int bindVar_index = 0;
       int locVar_index = 0;
@@ -184,7 +186,7 @@ namespace ufo
         auto &step = trace[s];
         bindVars2.clear();
         HornRuleExt& hr = ruleManager.chcs[step];
-        Expr body = hr.body;
+        Expr body = hr.getBody(s == trace.size() - 1);
         if (!hr.isFact && extraLemmas != NULL) body = mk<AND>(extraLemmas, body);
         if (!hr.isFact && invs[hr.srcRelation] != NULL)
         {
@@ -220,7 +222,7 @@ namespace ufo
         {
           Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVar_index++), m_efac);
           Expr var = cloneVar(hr.locVars[i], new_name);
-          body = replaceAll(body, hr.locVars[i], var);
+          bindLocVars[s].push_back(var);
 
           for (auto & a : mKeys)
           {
@@ -234,6 +236,7 @@ namespace ufo
             }
           }
         }
+        body = replaceAll(body, hr.locVars, bindLocVars[s]);
 
         ssa.push_back(body);
         bindVars.push_back(bindVars2);
@@ -249,7 +252,7 @@ namespace ufo
       } else if (isOpX<EQ>(fla) && isOpX<NEQ>(fla->right()) && fla->right()->right() == mk<UN_MINUS>(key)){
         assert (var == NULL);
         var = fla->left();
-      }else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
+      } else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
                  isOpX<UN_MINUS>(fla->right()->right()) && fla->right()->right()->left() == key){
         assert (var == NULL);
         var = fla->left();
@@ -259,10 +262,12 @@ namespace ufo
       }
     }
 
+
+    map<int, Expr> eKeys;
     set<vector<int>> unsat_prefs;
-    void exploreTracesTG(set<int>& keys, int cur_bnd, int bnd, bool skipTerm)
+
+    void initKeys(set<int>& keys, bool toElim = false)
     {
-      map<int, Expr> eKeys;
       for (auto & k : keys)
       {
         KeyTG* ar = new KeyTG();
@@ -271,23 +276,9 @@ namespace ufo
         mKeys[k] = ar;
       }
 
-      set<int> todoCHCs;
-
-      // first, get points of control-flow divergence
-      for (auto & d : ruleManager.decls)
-        if (ruleManager.outgs[d->left()].size() > 1)
-          for (auto & o : ruleManager.outgs[d->left()])
-            todoCHCs.insert(o);
-
-      // if the code is straight, just add queries
-      if (todoCHCs.empty())
-        for (int i = 0; i < ruleManager.chcs.size(); i++)
-          if (ruleManager.chcs[i].isQuery)
-            todoCHCs.insert(i);
-
       for (auto & hr : ruleManager.chcs)
       {
-        bool anyFound = false;
+        bool anyFound = toElim;
         for (auto it = eKeys.begin(); it != eKeys.end(); ++it)
         {
           Expr var = NULL;
@@ -305,11 +296,10 @@ namespace ufo
         }
         if (!anyFound)
         {
-          // optim sice we don't need to use loc vars there
+          // optim since we don't need to use loc vars there
           hr.body = eliminateQuantifiers(hr.body, hr.locVars);
         }
       }
-
       for (auto it = eKeys.begin(); it != eKeys.end(); ++it)
       {
         if (mKeys[(*it).first]->locPos.empty())
@@ -318,6 +308,24 @@ namespace ufo
           //exit(1);
         }
       }
+    }
+
+    void exploreTracesTG(int cur_bnd, int bnd, bool skipTerm)
+    {
+      set<int> todoCHCs;
+
+      // first, get points of control-flow divergence
+      for (auto & d : ruleManager.decls)
+        if (ruleManager.outgs[d->left()].size() > 1)
+          for (auto & o : ruleManager.outgs[d->left()])
+            todoCHCs.insert(o);
+
+      // if the code is straight, just add queries
+      if (todoCHCs.empty())
+        for (int i = 0; i < ruleManager.chcs.size(); i++)
+          if (ruleManager.chcs[i].isQuery)
+            todoCHCs.insert(i);
+
 
       while (cur_bnd <= bnd && !todoCHCs.empty())
       {
@@ -325,6 +333,8 @@ namespace ufo
         set<int> toErCHCs;
         for (auto & a : todoCHCs)
         {
+          if (find(toErCHCs.begin(), toErCHCs.end(), a) != toErCHCs.end())
+            continue;
           vector<vector<int>> traces;
           getAllTracesTG(mk<TRUE>(m_efac), a, cur_bnd, vector<int>(), traces);
           outs () << "  exploring traces (" << traces.size() << ") of length "
@@ -362,7 +372,8 @@ namespace ufo
             int suff = 1;
             bool suffFound = false;
             kVers.clear();
-            if (bool(!u.isSat(toExpr(t))))
+            Expr ssa = toExpr(t);
+            if (bool(!u.isSat(ssa)))
             {
               unsat_prefs.insert(t);
               continue;
@@ -1030,7 +1041,6 @@ namespace ufo
 
     bool getTest(bool tryAgain = true, int threshold = 50)
     {
-      if (!tryAgain) outs () << "smaller model found\n";
       map<int, ExprVector> newTest;
       ExprVector extra;
       ExprVector toCmp;
@@ -1049,12 +1059,15 @@ namespace ufo
           newTest[k.first].push_back(val);
         }
 
-        // outs () << "cur model:\n";
-        // pprint(toCmp, 3);
+        outs () << "cur model:\n";
+        pprint(toCmp, 3);
 
       if (extra.size() > 0)
         if (true == u.isSat(conjoin(extra, m_efac), false))
+        {
+          outs () << "smaller model found\n";
           return getTest(false, threshold);
+        }
 
       if (findTest(newTest)) return false;
 
