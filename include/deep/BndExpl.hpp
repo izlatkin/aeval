@@ -1039,11 +1039,11 @@ namespace ufo
       return false;
     }
 
+    ExprVector bodiesCnjs;
     bool getTest(bool tryAgain = true, int threshold = 50)
     {
       map<int, ExprVector> newTest;
-      ExprVector extra;
-      ExprVector toCmp;
+      ExprVector extra, toCmp;
       Expr ten = mkMPZ(threshold, m_efac);
       for (auto k : kVers)
         for (auto & a : k.second)
@@ -1063,11 +1063,16 @@ namespace ufo
         pprint(toCmp, 3);
 
       if (extra.size() > 0)
+      {
+        if (!bodiesCnjs.empty())      // maintained outside
+          extra.insert(extra.end(), bodiesCnjs.begin(), bodiesCnjs.end());
+
         if (true == u.isSat(conjoin(extra, m_efac), false))
         {
           outs () << "smaller model found\n";
           return getTest(false, threshold);
         }
+      }
 
       if (findTest(newTest)) return false;
 

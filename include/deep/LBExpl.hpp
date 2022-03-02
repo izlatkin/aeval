@@ -44,7 +44,11 @@ namespace ufo
             b = replaceAll(b, v, u.getModel(v));
 
           SMTUtils u2(m_efac);
-          if (u2.isSat(b)) chc.covered.push_back(i);
+          if (u2.isSat(b))
+          {
+            bodiesCnjs.push_back(chc.bodies[i]);
+            chc.covered.push_back(i);
+          }
         }
       }
 
@@ -120,14 +124,9 @@ namespace ufo
             }
 
             kVers.clear();
-            if (bool(!u.isSat(toExpr(t))))
+            if (bool(u.isSat(toExpr(t))))
             {
-              if (ruleManager.chcs[t.back()].bodies.size() <= 1)
-                unsat_prefs.insert(t);
-              trNum++;
-            }
-            else
-            {
+              bodiesCnjs.clear();
               for (auto & b : apps)
                 if (checkCovered(b, t[b]))
                 {
@@ -136,8 +135,14 @@ namespace ufo
                     toBreak = true;
                 }
 
-              if (getTest(false))
+              if (getTest())
                 printTest();
+            }
+            else
+            {
+              if (ruleManager.chcs[t.back()].bodies.size() <= 1)
+                unsat_prefs.insert(t);
+              trNum++;
             }
           }
           outs () << "    -> actually explored:  " << tot << ", |unsat prefs| = " << unsat_prefs.size() << "\n";
