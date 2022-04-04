@@ -16,10 +16,15 @@ namespace ufo
 
     LBExpl (CHCs& r, int l, bool d = false) : BndExpl(r, l, d) {}
 
-    bool checkCovered(int tr, int c)
+    bool checkCovered(int tr, int c, int &tot)
     {
       auto & chc = ruleManager.chcs[c];
-      if (chc.bodies.size() <= 1) return true;
+      if (chc.bodies.size() <= 1)
+      {
+        tot++;
+        return true;
+      }
+      // outs () << "   >>  cover: " << tr << ", " << c << ", " << chc.covered.size() << "/" << chc.bodies.size() << "\n";
 
       for (int i = 0; i < chc.bodies.size(); i++)
       {
@@ -48,6 +53,7 @@ namespace ufo
           {
             bodiesCnjs.push_back(chc.bodies[i]);
             chc.covered.push_back(i);
+            tot++;
           }
         }
       }
@@ -55,11 +61,9 @@ namespace ufo
       return chc.covered.size() == chc.bodies.size();
     }
 
-    void exploreTracesLBTG(int cur_bnd, int bnd)
+    set<int> todoCHCs;
+    void fillTodos()
     {
-      outs () << "exploreTracesLBTG\n";
-      set<int> todoCHCs;
-
       // get points of control-flow divergence
       for (auto & d : ruleManager.decls)
         if (ruleManager.outgs[d->left()].size() > 1)
@@ -70,7 +74,7 @@ namespace ufo
       for (int i = 0; i < ruleManager.chcs.size(); i++)
         if (ruleManager.chcs[i].bodies.size() > 1)
         {
-          outs () << "    Hyper egde detected: " << i << "\n";
+          // outs () << "    Hyper egde detected: " << i << "\n";
           todoCHCs.insert(i);
         }
 
@@ -79,6 +83,224 @@ namespace ufo
         for (int i = 0; i < ruleManager.chcs.size(); i++)
           if (ruleManager.chcs[i].isQuery)
             todoCHCs.insert(i);
+    }
+
+    int getNumUnvis(vector<int> &g)
+    {
+      int n = 0;
+      for (auto i : g)
+        if (find(todoCHCs.begin(), todoCHCs.end(), i) != todoCHCs.end())
+          n++;
+      return n;
+    }
+
+    void unroll(vector<int> &o, vector<vector<int>> &n)
+    {
+      for (Expr l : ruleManager.loopheads)
+      {
+        for (int i = o.size() - 1; i >= 0; i--)
+        {
+          if (ruleManager.chcs[o[i]].dstRelation == l)
+          {
+            for (auto & a : ruleManager.cycles[l])
+            {
+              if (getNumUnvis(a) == 0) continue;
+
+              vector<int> nn = o;
+              nn.insert(nn.begin()+i+1, a.begin(), a.end());
+              unique_push_back(nn, n);
+            }
+            break; // experiment: exit early, unroll only at the end
+          }
+        }
+      }
+    }
+
+    void pruneLast(vector<vector<int>> &o)
+    {
+      vector<vector<int>> n;
+      for (auto & a : o)
+      {
+        while (!a.empty())
+        {
+          if (find(todoCHCs.begin(), todoCHCs.end(), a.back()) == todoCHCs.end() &&
+              find(ruleManager.loopheads.begin(), ruleManager.loopheads.end(),
+                   ruleManager.chcs[a.back()].srcRelation) == ruleManager.loopheads.end())
+            a.pop_back();
+          else break;
+        }
+        unique_push_back(a, n);
+      }
+      o = n;
+    }
+
+    int weight(int i)
+    {
+      if (find(todoCHCs.begin(), todoCHCs.end(), i) == todoCHCs.end())
+        return 0;
+      return 1;
+      // TODO:  if (chc.bodies.size() > 1) return....
+      // TODO: num of conjuncts
+    }
+
+   void print(vector<int> &g)
+   {
+     outs () << "  ";
+     for (auto f : g)
+       outs () << "  " << ruleManager.chcs[f].dstRelation << "("
+                       << ruleManager.chcs[f].covered.size() << "/"
+                       << ruleManager.chcs[f].bodies.size() << ")" << " -> ";
+     outs () << "\n";
+   }
+
+    vector<vector<int>> consideredThisRound;
+    bool getNext(vector<vector<int>> & cntr, vector<int> &n)
+    {
+      int curMax = 0;
+      for (int i = cntr.size() - 1; i >= 0; i --)
+      {
+        int cur = 0;
+        auto & g = cntr[i];
+
+        if (find(consideredThisRound.begin(), consideredThisRound.end(), g) !=
+                 consideredThisRound.end()) continue;
+
+        if (already_unsat(g))
+        {
+          cntr.erase(find(cntr.begin(), cntr.end(), g));
+          continue;
+        }
+        for (auto i : g) cur += weight(i);
+        if (cur > curMax)
+        {
+          n = g;
+          curMax = cur;
+        }
+      }
+      consideredThisRound.push_back(n);
+      return curMax > 0;
+    }
+
+    void success(vector<int>& g, vector<vector<int>> & cntr, vector<vector<int>> & prio1,
+                                 vector<vector<int>> & prio2)
+    {
+      int rem = todoCHCs.size();
+      int tot = 0;
+      for (int i = 0; i < g.size(); i++)
+        if (find(todoCHCs.begin(), todoCHCs.end(), g[i]) != todoCHCs.end())
+          if (checkCovered(i, g[i], tot))
+            todoCHCs.erase(g[i]);
+      if (rem == todoCHCs.size())
+      {
+        auto f = find(cntr.begin(), cntr.end(), g);
+        if (f != cntr.end()) cntr.erase(f);
+        unique_push_back(g, prio2);
+      }
+      else
+      {
+        outs () << "Rem TODOs: " << todoCHCs.size() << "    (sz = " << g.size() << ")" << "\n";
+        unique_push_back(g, prio1);
+      }
+
+      if (tot > 0)
+        if (getTest(false)) printTest();
+    }
+
+    void oneRound(vector<vector<int>> & cntr, vector<vector<int>> & prio1,
+                  vector<vector<int>>& prio2, vector<vector<int>>& prio3)
+    {
+      int sz;
+      outs() << "cntr sz = " << cntr.size() << "\n";
+      consideredThisRound.clear();
+      while (true)
+      {
+        vector<int> g;
+        if (!getNext(cntr, g)) break;
+
+        ExprVector ssa;
+        getSSA(g, ssa);
+        auto res = u.isSatIncrem(ssa, sz);
+        if (true == res)
+        {
+          success(g, cntr, prio1, prio2);
+        }
+        else if (false == res)
+        {
+          cntr.erase(find(cntr.begin(), cntr.end(), g));
+
+          if (sz > 0)
+          {
+            if (ruleManager.chcs[g[sz-1]].isQuery)
+            {
+              auto h = g;
+              h.resize(sz-1);
+              ssa.resize(sz-1);
+              u.isSat(ssa);            // need to re-solve. to optimize
+              success(h, cntr, prio1, prio2);
+            }
+            if (ruleManager.chcs[g[sz-1]].bodies.size() <= 1 ||
+                ruleManager.chcs[g[sz-1]].covered.size() == 0)
+            {
+              g.resize(sz);
+              unsat_prefs.insert(g);
+            }
+            g.resize(sz-1);
+            unique_push_back(g, prio3);
+          }
+        }
+        else
+        {
+          if (debug) assert(0 && "indeterminate");
+        }
+      }
+  //    pruneLast(prio1);
+    }
+
+    void exploreRec(vector<vector<int>> & traces, int lvl, string name, int batch = 50)
+    {
+      int it = 0;
+      while (it < traces.size())
+      {
+        outs () << "entering lvl: " << lvl << ", \"" << name << "\", batch " << it << "\n";
+        vector<vector<int>> traces_prt;
+
+        if (lvl == 0)
+        {
+          traces_prt = traces;
+          it = traces.size();
+        }
+        else
+          for (int j = 0; j < batch && it < traces.size(); it++, j++)
+            unroll(traces[it], traces_prt);
+
+        outs () << "considering " << traces_prt.size() << " traces\n";
+
+        vector<vector<int>> traces_prio, traces_unsat_cond, traces_unsat;
+        oneRound(traces_prt, traces_prio, traces_unsat_cond, traces_unsat);
+
+        // rec.calls :
+        exploreRec(traces_prio, lvl + 1, "prio sats");
+        exploreRec(traces_prt, lvl + 1, "next");
+        exploreRec(traces_unsat_cond, lvl + 1, "unsats cond");
+        exploreRec(traces_unsat, lvl + 1, "unsats");
+
+        outs () << "exiting lvl: " << lvl << "\n";
+      }
+    }
+
+    void exploreTracesMaxLb()
+    {
+      outs () << "LB-MAX\n";
+      fillTodos();
+      outs () << "Total TODOs: " << todoCHCs.size() << "\n";
+      exploreRec(ruleManager.acyclic, 0, "init");
+    }
+
+    // original version; similar to TACAS'22
+    void exploreTracesLBTG(int cur_bnd, int bnd)
+    {
+      outs () << "exploreTracesLBTG\n";
+      fillTodos();
 
       while (cur_bnd <= bnd && !todoCHCs.empty())
       {
@@ -127,20 +349,21 @@ namespace ufo
             if (bool(u.isSat(toExpr(t))))
             {
               bodiesCnjs.clear();
+              int tot = 0;
               for (auto & b : apps)
-                if (checkCovered(b, t[b]))
+                if (checkCovered(b, t[b], tot))
                 {
                   toErCHCs.insert(t[b]);
                   if (b == t.size() - 1)
                     toBreak = true;
                 }
-
-              if (getTest())
-                printTest();
+              if (tot > 0)
+                if (getTest()) printTest();
             }
             else
             {
-              if (ruleManager.chcs[t.back()].bodies.size() <= 1)
+              if (ruleManager.chcs[t.back()].bodies.size() <= 1 ||
+                  ruleManager.chcs[t.back()].covered.size() == 0)
                 unsat_prefs.insert(t);
               trNum++;
             }

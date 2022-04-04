@@ -102,7 +102,7 @@ namespace ufo
 
     template <typename T> boost::tribool isSat(T& cnjs, bool reset=true)
     {
-      if (!reset) allVars.clear();
+      allVars.clear();
       if (m != NULL) { free(m); m = NULL; }
       if (reset) smt.reset();
       for (auto & c : cnjs)
@@ -159,6 +159,21 @@ namespace ufo
       ExprSet cnjs;
       getConj(a, cnjs);
       return isSat(cnjs, reset);
+    }
+
+    /**
+     * Incremental SMT-check
+     */
+    boost::tribool isSatIncrem(ExprVector& v, int& sz)
+    {
+      sz = 0;
+      while (sz < v.size())
+      {
+        auto res = isSat(v[sz], sz == 0);
+        sz++;
+        if (res == false || indeterminate(res)) return res;
+      }
+      return true;    // sat
     }
 
     /**
@@ -468,7 +483,7 @@ namespace ufo
       {
         getLiterals(ex, lits, splitEqs);
         for (auto it = lits.begin(); it != lits.end(); ){
-          if (isOpX<TRUE>(m(*it))) ++it;
+          if (isOpX<TRUE>(m.eval(*it))) ++it;
           else it = lits.erase(it);
         }
       }

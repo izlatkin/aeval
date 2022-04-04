@@ -363,7 +363,7 @@ namespace ufo
       return true;
     }
 
-    void reParse(bool lb = false, bool doElim = false)
+    void reParse(bool lb = false, bool cycl = true)
     {
       chcs = chcsOrig;
       for (auto it = redChcs.rbegin(); it != redChcs.rend(); ++it)
@@ -382,7 +382,6 @@ namespace ufo
         u.flatten(chcs[i].body, chcs[i].bodies, false, vars2keep, [](Expr a, ExprVector& b){return a;});
         if (!lb && chcs[i].bodies.size() > 1)
         {
-          outs () << "   " << chcs[i].srcRelation << " -> " << chcs[i].dstRelation << "\n";
           toErase.push_back(i);
           for (auto & p : chcs[i].bodies)
           {
@@ -395,7 +394,7 @@ namespace ufo
         }
       }
 
-      if (!lb)
+      if (cycl)
       {
         for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
           chcs.erase(chcs.begin() + *it);
@@ -417,7 +416,7 @@ namespace ufo
             for (auto & o : outgs[d->left()])
               outs () << "     (" << o << ")  -> " << *chcs[o].dstRelation << "\n"; }
 
-        print(debug >= 3, true);
+        // print(debug >= 3, true);
       }
     }
 
@@ -1002,16 +1001,32 @@ namespace ufo
 
     void findCycles()
     {
-      print(false, true);
       ExprVector av;
-      findCycles(mk<TRUE>(m_efac), failDecl, av);
+      ExprVector endRels = {failDecl};
+      for (auto & d : decls)
+      {
+        if (outgs[d->left()].empty())
+          endRels.push_back(d->left());
+
+        // heuristics for SeaHorn-encoding:
+        if (lexical_cast<string>(d).find(".exit.") !=std::string::npos)
+          endRels.push_back(d->left());
+      }
+
+      for (auto & r : endRels)
+        findCycles(mk<TRUE>(m_efac), r, av);
+
+      outs () << "global traces num: " << acyclic.size() << "\n";
+      for (auto & a : cycles)
+        outs () << "  traces num for: " << a.first << ": " << a.second.size() << "\n";
+
       cycleSearchDone = true;
       cyclesIt = cycles.begin();
     }
 
     bool findCycles(Expr src, Expr dst, ExprVector& avoid)
     {
-      if (debug >= 2) outs () << "findCycles:  " << src << " => " << dst << "\n";
+      if (debug >= 2) outs () << "\nfindCycles:  " << src << " => " << dst << "\n";
       vector<vector<int>> nonCycleTraces;
       ExprVector highLevelRels;
       for (int i = 1; i < chcs.size(); i++)
@@ -1031,7 +1046,7 @@ namespace ufo
         vector<int> tmp;
         for (auto & chcNum : d)
         {
-          if (chcs[chcNum].isQuery) break;
+          if (chcs[chcNum].isQuery) break;      // last iter anyway
           Expr& r = chcs[chcNum].dstRelation;
           tmp.push_back(chcNum);
           if (find(avoid.begin(), avoid.end(), r) == avoid.end())
@@ -1048,11 +1063,11 @@ namespace ufo
         {
           if (debug)
             outs () << "traces num for " << src << ": " << nonCycleTraces.size() << "\n";
-          cycles[src] = nonCycleTraces;
+          cycles[src].insert(cycles[src].end(), nonCycleTraces.begin(), nonCycleTraces.end());
         }
         else
         {
-          acyclic = nonCycleTraces;
+          acyclic.insert(acyclic.end(), nonCycleTraces.begin(), nonCycleTraces.end());
         }
       }
       else
@@ -1090,6 +1105,11 @@ namespace ufo
           for (auto h : c)
             outs () << " -> " << chcs[h].dstRelation << " ";
           outs () << "\n";
+        }
+        else if (debug)
+        {
+          outs () << "traces num for " << chcs[c[0]].srcRelation << ": "
+                  << c.size() << "\n";
         }
 
         for (auto h : c)
@@ -1147,35 +1167,6 @@ namespace ufo
       return rel;
     }
 
-    void addRule (HornRuleExt* r)
-    {
-      chcs.push_back(*r);
-      Expr srcRel = r->srcRelation;
-      if (!isOpX<TRUE>(srcRel))
-      {
-        if (invVars[srcRel].size() == 0)
-        {
-          addDeclAndVars(srcRel, r->srcVars);
-        }
-      }
-      outgs[srcRel].push_back(chcs.size()-1);
-    }
-
-    void addDeclAndVars(Expr rel, ExprVector& args)
-    {
-      ExprVector types;
-      for (auto &var: args) {
-        types.push_back (bind::typeOf (var));
-      }
-      types.push_back (mk<BOOL_TY> (m_efac));
-
-      decls.insert(bind::fdecl (rel, types));
-      for (auto & v : args)
-      {
-        invVars[rel].push_back(v);
-      }
-    }
-
     void addFailDecl(Expr decl)
     {
       if (failDecl == NULL)
@@ -1196,138 +1187,6 @@ namespace ufo
     {
       Expr tmp = keepQuantifiers(hr->body, hr->srcVars);
       return weakenForHardVars(tmp, hr->srcVars);
-    }
-
-    // Transformations
-
-    void copyIterations(Expr decl, int num)
-    {
-      HornRuleExt* hr;
-      for (auto &a : chcs) if (a.srcRelation == decl->left() && a.dstRelation == decl->left()) hr = &a;
-      Expr pre = getPrecondition(hr);
-      ExprSet newCnjs;
-      newCnjs.insert(mk<NEG>(pre));
-      for (int i = 0; i < hr->srcVars.size(); i++)
-      {
-        newCnjs.insert(mk<EQ>(hr->dstVars[i], hr->srcVars[i]));
-      }
-      Expr body2 = conjoin(newCnjs, m_efac);
-
-      // adaping the code from BndExpl.hpp
-      ExprVector ssa;
-      ExprVector bindVars1;
-      ExprVector bindVars2;
-      ExprVector newLocals;
-      int bindVar_index = 0;
-      int locVar_index = 0;
-
-      for (int c = 0; c < num; c++)
-      {
-        Expr body = hr->body;
-        bindVars2.clear();
-        if (c != 0)
-        {
-          body = replaceAll(mk<OR>(body, body2), hr->srcVars, bindVars1);
-          for (int i = 0; i < hr->locVars.size(); i++)
-          {
-            Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVar_index++), m_efac);
-            Expr var = cloneVar(hr->locVars[i], new_name);
-            body = replaceAll(body, hr->locVars[i], var);
-            newLocals.push_back(var);
-          }
-        }
-
-        if (c != num-1)
-        {
-          for (int i = 0; i < hr->dstVars.size(); i++)
-          {
-            Expr new_name = mkTerm<string> ("__bnd_var_" + to_string(bindVar_index++), m_efac);
-            bindVars2.push_back(cloneVar(hr->dstVars[i], new_name));
-            body = replaceAll(body, hr->dstVars[i], bindVars2[i]);
-            newLocals.push_back(bindVars2[i]);
-          }
-        }
-        ssa.push_back(body);
-        bindVars1 = bindVars2;
-      }
-      hr->body = conjoin(ssa, m_efac);
-      hr->locVars.insert(hr->locVars.end(), newLocals.begin(), newLocals.end());
-    }
-
-    bool checkWithSpacer()
-    {
-      bool success = false;
-
-      // fixed-point object
-      ZFixedPoint<EZ3> fp (m_z3);
-      ZParams<EZ3> params (m_z3);
-      params.set (":engine", "spacer");
-      params.set (":xform.slice", false);
-      params.set (":pdr.utvpi", false);
-      params.set (":use_heavy_mev", true);
-      params.set (":xform.inline-linear", false);
-      params.set (":xform.inline-eager", false);
-      params.set (":xform.inline-eager", false);
-
-      fp.set (params);
-
-      fp.registerRelation (bind::boolConstDecl(failDecl));
-
-      for (auto & dcl : decls) fp.registerRelation (dcl);
-      Expr errApp;
-
-      for (auto & r : chcs)
-      {
-        ExprSet allVars;
-        allVars.insert(r.srcVars.begin(), r.srcVars.end());
-        allVars.insert(r.dstVars.begin(), r.dstVars.end());
-        allVars.insert(r.locVars.begin(), r.locVars.end());
-
-        if (!r.isQuery)
-        {
-          for (auto & dcl : decls)
-          {
-            if (dcl->left() == r.dstRelation)
-            {
-              r.head = bind::fapp (dcl, r.dstVars);
-              break;
-            }
-          }
-        }
-        else
-        {
-          r.head = bind::fapp(bind::boolConstDecl(failDecl));
-          errApp = r.head;
-        }
-
-        Expr pre;
-        if (!r.isFact)
-        {
-          for (auto & dcl : decls)
-          {
-            if (dcl->left() == r.srcRelation)
-            {
-              pre = bind::fapp (dcl, r.srcVars);
-              break;
-            }
-          }
-        }
-        else
-        {
-          pre = mk<TRUE>(m_efac);
-        }
-
-        fp.addRule(allVars, boolop::limp (mk<AND>(pre, r.body), r.head));
-      }
-      try {
-        success = bool(!fp.query(errApp));
-      } catch (z3::exception &e){
-        char str[3000];
-        strncpy(str, e.msg(), 300);
-        errs() << "Z3 ex: " << str << "...\n";
-        exit(55);
-      }
-      return success;
     }
 
     void print (bool full = false, bool dump_cfg = false)

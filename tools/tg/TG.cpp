@@ -75,6 +75,7 @@ const char *OPT_HELP = "--help";
 const char *OPT_MAX_ATTEMPTS = "--attempts";
 const char *OPT_TO = "--to";
 const char *OPT_LB = "--lb";
+const char *OPT_LMAX = "--max";
 const char *OPT_ELIM = "--skip-elim";
 const char *OPT_ARITHM = "--skip-arithm";
 const char *OPT_SEED = "--inv-mode";
@@ -98,6 +99,7 @@ int main (int argc, char ** argv)
   bool to_skip = getBoolValue("--no-term", false, argc, argv);
   int lookahead = getIntValue("--lookahead", 0, argc, argv);
   bool lb = getBoolValue(OPT_LB, false, argc, argv);
+  bool lmax = getBoolValue(OPT_LMAX, false, argc, argv);
 
   // All other attrs are inherited from FreqHorn:
   int max_attempts = getIntValue(OPT_MAX_ATTEMPTS, 10, argc, argv);
@@ -129,6 +131,6 @@ int main (int argc, char ** argv)
 
   testgen(string(argv[argc-1]), nums, max_attempts, to, densecode, aggressivepruning,
                      do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s,
-                     to_skip, invMode, lookahead, lb, debug);
+                     to_skip, invMode, lookahead, lb, lmax, debug);
   return 0;
 }

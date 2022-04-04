@@ -193,10 +193,7 @@ namespace ufo
           body = mk<AND>(invs[hr.srcRelation], body);
         }
 
-        for (int i = 0; i < hr.srcVars.size(); i++)
-        {
-          body = replaceAll(body, hr.srcVars[i], bindVars1[i]);
-        }
+        body = replaceAll(body, hr.srcVars, bindVars1);
 
         for (int i = 0; i < hr.dstVars.size(); i++)
         {
@@ -1059,8 +1056,11 @@ namespace ufo
           newTest[k.first].push_back(val);
         }
 
+      if (debug)
+      {
         outs () << "cur model:\n";
         pprint(toCmp, 3);
+      }
 
       if (extra.size() > 0)
       {
@@ -1069,7 +1069,7 @@ namespace ufo
 
         if (true == u.isSat(conjoin(extra, m_efac), false))
         {
-          outs () << "smaller model found\n";
+          if (debug) outs () << "smaller model found\n";
           return getTest(false, threshold);
         }
       }

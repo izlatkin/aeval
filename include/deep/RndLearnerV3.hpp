@@ -1644,7 +1644,7 @@ namespace ufo
                       bool freqs, bool aggp, bool enableDataLearning, bool doElim,
                       bool doDisj, int doProp, bool dAllMbp, bool dAddProp, bool dAddDat,
                       bool dStrenMbp, bool toSkip, int invMode, int lookahead,
-                      bool lb, int debug)
+                      bool lb, bool lmax, int debug)
   {
     ExprFactory m_efac;
     EZ3 z3(m_efac);
@@ -1654,7 +1654,7 @@ namespace ufo
     if (invMode == 0)
     {
       ruleManager.parse(smt, 0);
-      ruleManager.reParse(lb);
+      ruleManager.reParse(lb, lmax);
     }
     else
     {
@@ -1735,7 +1735,9 @@ namespace ufo
       LBExpl bnd1(ruleManager, lookahead, false);
       bnd1.initKeys(nums, lb);
       bnd1.setInvs(invs);
-      if (lb)
+      if (lb && lmax)
+        bnd1.exploreTracesMaxLb();
+      else if (lb)
         bnd1.exploreTracesLBTG(1, 1000);
       else
         bnd1.exploreTracesTG(1, 1000, toSkip);

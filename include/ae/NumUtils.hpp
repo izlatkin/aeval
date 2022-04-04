@@ -1,6 +1,5 @@
 #ifndef NUMUTILS__HPP__
 #define NUMUTILS__HPP__
-#include <assert.h>
 
 using namespace std;
 
