@@ -177,6 +177,7 @@ namespace ufo
       ExprVector bindVars2;
       bindVars.clear();
       bindLocVars.clear();
+      kVers.clear();
       ExprVector bindVars1 = ruleManager.chcs[trace[0]].srcVars;
       int bindVar_index = 0;
       int locVar_index = 0;
@@ -368,7 +369,6 @@ namespace ufo
 
             int suff = 1;
             bool suffFound = false;
-            kVers.clear();
             Expr ssa = toExpr(t);
             if (bool(!u.isSat(ssa)))
             {
@@ -409,7 +409,6 @@ namespace ufo
               {
                 tr.insert(tr.begin(), t.begin(), t.end());
 
-                kVers.clear();
                 if (bool(u.isSat(toExpr(tr))))
                 {
 //                  outs () << "\n    visited: ";

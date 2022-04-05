@@ -199,6 +199,7 @@ namespace ufo
       else
       {
         outs () << "Rem TODOs: " << todoCHCs.size() << "    (sz = " << g.size() << ")" << "\n";
+        outs ().flush();
         unique_push_back(g, prio1);
       }
 
@@ -345,7 +346,6 @@ namespace ufo
               continue;
             }
 
-            kVers.clear();
             if (bool(u.isSat(toExpr(t))))
             {
               bodiesCnjs.clear();
