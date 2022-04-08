@@ -104,10 +104,14 @@ namespace ufo
           {
             for (auto & a : ruleManager.cycles[l])
             {
-              if (getNumUnvis(a) == 0) continue;
-
+              if (emptCycls[a])
+              {
+                if (emptCyclsVisited[a]) continue;
+                else emptCyclsVisited[a] = true;   // unroll only once
+              }
               vector<int> nn = o;
               nn.insert(nn.begin()+i+1, a.begin(), a.end());
+              if (getNumUnvis(nn) == 0) continue;
               unique_push_back(nn, n);
             }
             break; // experiment: exit early, unroll only at the end
@@ -116,22 +120,17 @@ namespace ufo
       }
     }
 
-    void pruneLast(vector<vector<int>> &o)
+    void pruneLast(vector<int> &a)
     {
-      vector<vector<int>> n;
-      for (auto & a : o)
+      while (!a.empty())
       {
-        while (!a.empty())
-        {
-          if (find(todoCHCs.begin(), todoCHCs.end(), a.back()) == todoCHCs.end() &&
-              find(ruleManager.loopheads.begin(), ruleManager.loopheads.end(),
-                   ruleManager.chcs[a.back()].srcRelation) == ruleManager.loopheads.end())
-            a.pop_back();
-          else break;
-        }
-        unique_push_back(a, n);
+
+        if (find(todoCHCs.begin(), todoCHCs.end(), a.back()) == todoCHCs.end() &&
+            find(ruleManager.loopheads.begin(), ruleManager.loopheads.end(),
+                 ruleManager.chcs[a.back()].srcRelation) == ruleManager.loopheads.end())
+          a.pop_back();
+        else break;
       }
-      o = n;
     }
 
     int weight(int i)
@@ -194,12 +193,14 @@ namespace ufo
       {
         auto f = find(cntr.begin(), cntr.end(), g);
         if (f != cntr.end()) cntr.erase(f);
+        pruneLast(g);
         unique_push_back(g, prio2);
       }
       else
       {
         outs () << "Rem TODOs: " << todoCHCs.size() << "    (sz = " << g.size() << ")" << "\n";
         outs ().flush();
+        pruneLast(g);
         unique_push_back(g, prio1);
       }
 
@@ -245,7 +246,8 @@ namespace ufo
               g.resize(sz);
               unsat_prefs.insert(g);
             }
-            g.resize(sz-1);
+
+            pruneLast(g);
             unique_push_back(g, prio3);
           }
         }
@@ -254,7 +256,14 @@ namespace ufo
           if (debug) assert(0 && "indeterminate");
         }
       }
-  //    pruneLast(prio1);
+
+      vector<vector<int>> tmp;
+      for (auto & a : cntr)
+      {
+        pruneLast(a);
+        unique_push_back(a, tmp);
+      }
+      cntr = tmp;
     }
 
     void exploreRec(vector<vector<int>> & traces, int lvl, string name, int batch = 50)
@@ -274,8 +283,6 @@ namespace ufo
           for (int j = 0; j < batch && it < traces.size(); it++, j++)
             unroll(traces[it], traces_prt);
 
-        outs () << "considering " << traces_prt.size() << " traces\n";
-
         vector<vector<int>> traces_prio, traces_unsat_cond, traces_unsat;
         oneRound(traces_prt, traces_prio, traces_unsat_cond, traces_unsat);
 
@@ -289,9 +296,31 @@ namespace ufo
       }
     }
 
+    map<vector<int>, bool> emptCycls, emptCyclsVisited;
+    void findEmptyLoops()
+    {
+      for (auto & a : ruleManager.cycles)
+      {
+        for(auto t : a.second)
+        {
+          auto e = toExpr(t);
+          auto & v1 = ruleManager.chcs[t[0]].srcVars;
+          auto & v2 = bindVars.back();
+          assert(v1.size() == v2.size());
+          ExprVector tmp;
+          for (int i = 0; i < v1.size(); i++)
+            tmp.push_back(mk<EQ>(v1[i], v2[i]));
+          if (u.implies(e, conjoin(tmp, m_efac)))
+            emptCycls[t] = true;
+        }
+      }
+    }
+
     void exploreTracesMaxLb()
     {
       outs () << "LB-MAX\n";
+      findEmptyLoops();
+
       fillTodos();
       outs () << "Total TODOs: " << todoCHCs.size() << "\n";
       exploreRec(ruleManager.acyclic, 0, "init");

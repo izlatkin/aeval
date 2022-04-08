@@ -1015,7 +1015,7 @@ namespace ufo
 
       for (auto & r : endRels)
         findCycles(mk<TRUE>(m_efac), r, av);
-
+    // print(false, true);
       outs () << "global traces num: " << acyclic.size() << "\n";
       for (auto & a : cycles)
         outs () << "  traces num for: " << a.first << ": " << a.second.size() << "\n";
@@ -1063,11 +1063,13 @@ namespace ufo
         {
           if (debug)
             outs () << "traces num for " << src << ": " << nonCycleTraces.size() << "\n";
-          cycles[src].insert(cycles[src].end(), nonCycleTraces.begin(), nonCycleTraces.end());
+          for (auto & c : nonCycleTraces)
+            unique_push_back(c, cycles[src]);
         }
         else
         {
-          acyclic.insert(acyclic.end(), nonCycleTraces.begin(), nonCycleTraces.end());
+          for (auto & c : nonCycleTraces)
+            unique_push_back(c, acyclic);
         }
       }
       else
