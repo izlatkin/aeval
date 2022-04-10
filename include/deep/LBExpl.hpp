@@ -124,7 +124,6 @@ namespace ufo
     {
       while (!a.empty())
       {
-
         if (find(todoCHCs.begin(), todoCHCs.end(), a.back()) == todoCHCs.end() &&
             find(ruleManager.loopheads.begin(), ruleManager.loopheads.end(),
                  ruleManager.chcs[a.back()].srcRelation) == ruleManager.loopheads.end())
@@ -236,8 +235,7 @@ namespace ufo
             {
               auto h = g;
               h.resize(sz-1);
-              ssa.resize(sz-1);
-              u.isSat(ssa);            // need to re-solve. to optimize
+              u.reSolve(ssa.size() - sz + 1);
               success(h, cntr, prio1, prio2);
             }
             if (ruleManager.chcs[g[sz-1]].bodies.size() <= 1 ||
@@ -266,7 +264,7 @@ namespace ufo
       cntr = tmp;
     }
 
-    void exploreRec(vector<vector<int>> & traces, int lvl, string name, int batch = 50)
+    void exploreRec(vector<vector<int>> & traces, int lvl, string name, int batch = 20)
     {
       int it = 0;
       while (it < traces.size())
@@ -283,6 +281,8 @@ namespace ufo
           for (int j = 0; j < batch && it < traces.size(); it++, j++)
             unroll(traces[it], traces_prt);
 
+        outs () << "considering " << traces_prt.size() << " traces\n";
+
         vector<vector<int>> traces_prio, traces_unsat_cond, traces_unsat;
         oneRound(traces_prt, traces_prio, traces_unsat_cond, traces_unsat);
 
@@ -297,29 +297,78 @@ namespace ufo
     }
 
     map<vector<int>, bool> emptCycls, emptCyclsVisited;
-    void findEmptyLoops()
+    void findUselessPaths()
     {
+      outs () << "total for global: " << ruleManager.acyclic.size() << "\n";
+      for (auto it = ruleManager.acyclic.begin(); it != ruleManager.acyclic.end(); )
+      {
+        auto & t = *it;
+        int i = 0;
+        int j = 0;
+        bool unsat = false;
+        while (j < t.size() && !unsat)
+        {
+          bool lhfound = false;
+          for (Expr l : ruleManager.loopheads)
+          {
+            if (ruleManager.chcs[t[j]].dstRelation == l || j == t.size() - 1)
+            {
+              vector<int> tmp;
+              for (int k = i; k <= j; k++) tmp.push_back(t[k]);
+              ExprVector ssa;
+              getSSA(tmp, ssa);
+              int sz;
+              if (false == u.isSatIncrem(ssa, sz)) unsat = true;
+              lhfound = true;
+              break;
+            }
+          }
+          if (lhfound) i = j + 1;
+          j++;
+        }
+        if (unsat) it = ruleManager.acyclic.erase(it);
+        else ++it;
+      }
+
+      outs () << "upd for global: " << ruleManager.acyclic.size() << "\n";
+
       for (auto & a : ruleManager.cycles)
       {
-        for(auto t : a.second)
+        outs () << "total for " << a.first << ": " << a.second.size() << "\n";
+        for (auto it = a.second.begin(); it != a.second.end(); )
         {
-          auto e = toExpr(t);
+          auto & t = *it;
+          ExprVector ssa;
+          getSSA(t, ssa);
           auto & v1 = ruleManager.chcs[t[0]].srcVars;
           auto & v2 = bindVars.back();
           assert(v1.size() == v2.size());
           ExprVector tmp;
           for (int i = 0; i < v1.size(); i++)
             tmp.push_back(mk<EQ>(v1[i], v2[i]));
-          if (u.implies(e, conjoin(tmp, m_efac)))
-            emptCycls[t] = true;
+          ssa.push_back(mk<NEG>(conjoin(tmp, m_efac)));
+
+          int sz;
+          auto res = u.isSatIncrem(ssa, sz);
+          if (res == false)
+          {
+            if (sz == ssa.size()) emptCycls[t] = true;
+            else
+            {
+              it = a.second.erase(it);
+              continue;
+            }
+          }
+          it++;
         }
+        outs () << "upd for " << a.first << ": " << a.second.size() << "\n";
       }
     }
 
     void exploreTracesMaxLb()
     {
       outs () << "LB-MAX\n";
-      findEmptyLoops();
+      findUselessPaths();
 
       fillTodos();
       outs () << "Total TODOs: " << todoCHCs.size() << "\n";

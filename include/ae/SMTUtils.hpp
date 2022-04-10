@@ -15,17 +15,19 @@ namespace ufo
 
     ExprFactory &efac;
     EZ3 z3;
-    ZSolver<EZ3> smt;
+    vector<ZSolver<EZ3>> smt;
+    vector<ExprVector> pushed;
     bool can_get_model;
     ZSolver<EZ3>::Model* m;
+    int slv = -1;
 
   public:
 
     SMTUtils (ExprFactory& _efac) :
-      efac(_efac), z3(efac), smt (z3), can_get_model(0), m(NULL) {}
+      efac(_efac), z3(efac), can_get_model(0), m(NULL) {}
 
     SMTUtils (ExprFactory& _efac, unsigned _to) :
-      efac(_efac), z3(efac), smt (z3, _to), can_get_model(0), m(NULL) {}
+      efac(_efac), z3(efac), can_get_model(0), m(NULL) {}
 
     boost::tribool eval(Expr v, ZSolver<EZ3>::Model* m1)
     {
@@ -46,7 +48,7 @@ namespace ufo
     ZSolver<EZ3>::Model* getModelPtr()
     {
       if (!can_get_model) return NULL;
-      if (m == NULL) m = smt.getModelPtr();
+      if (m == NULL) m = smt[slv].getModelPtr();
       return m;
     }
 
@@ -93,9 +95,9 @@ namespace ufo
       while (true)
       {
         getModel(vars, e);
-        smt.assertExpr(mk<T>(v, e[v]));
+        smt[slv].assertExpr(mk<T>(v, e[v]));
         if (m != NULL) { free(m); m = NULL; }
-        auto res = smt.solve();
+        auto res = smt[slv].solve();
         if (!res || indeterminate(res)) return;
       }
     }
@@ -104,13 +106,23 @@ namespace ufo
     {
       allVars.clear();
       if (m != NULL) { free(m); m = NULL; }
-      if (reset) smt.reset();
+      if (reset)
+      {
+        slv = smt.size();
+        smt.push_back(ZSolver<EZ3>(z3));
+        pushed.push_back({});
+      //  outs () << "   new solver: " << slv << "\n";
+        smt[slv].reset();
+      }
       for (auto & c : cnjs)
       {
         filter (c, bind::IsConst (), inserter (allVars, allVars.begin()));
-        smt.assertExpr(c);
+        smt[slv].push();
+        smt[slv].assertExpr(c);
+        pushed[slv].push_back(c);
       }
-      boost::tribool res = smt.solve ();
+
+      boost::tribool res = smt[slv].solve ();
       can_get_model = res ? true : false;
       return res;
     }
@@ -156,8 +168,8 @@ namespace ufo
      */
     boost::tribool isSat(Expr a, bool reset=true)
     {
-      ExprSet cnjs;
-      getConj(a, cnjs);
+      ExprSet cnjs = {a};
+      // getConj(a, cnjs);
       return isSat(cnjs, reset);
     }
 
@@ -166,7 +178,42 @@ namespace ufo
      */
     boost::tribool isSatIncrem(ExprVector& v, int& sz)
     {
-      sz = 0;
+      int csz = 0;
+      int cslv = 0;
+      for (int i = 0; i < pushed.size(); i++)
+      {
+        int j = 0;
+        while (j < v.size() && j < pushed[i].size())
+        {
+          if (v[j] != pushed[i][j]) break;
+          j++;
+        }
+        if (j > csz)
+        {
+          csz = j;
+          cslv = i;
+        }
+      }
+      if (csz > v.size() / 3)  // heuristic
+      {
+        //outs () << "  reusing solver " << cslv << " with " << csz << " pushed things\n";
+        sz = csz;
+        slv = cslv;
+        int psz = pushed[slv].size();
+        if (psz > sz)
+        {
+          smt[slv].pop(psz - sz);
+          pushed[slv].resize(sz);
+        }
+        if (sz == v.size())
+        {
+          boost::tribool res = smt[slv].solve ();
+          can_get_model = res ? true : false;
+          return res;
+        }
+      }
+      else sz = 0;
+
       while (sz < v.size())
       {
         auto res = isSat(v[sz], sz == 0);
@@ -212,6 +259,15 @@ namespace ufo
       if (isOpX<FALSE>(a)) return true;
       if (isOpX<NEQ>(a) && a->left() == a->right()) return true;
       return !isSat(a);
+    }
+
+    boost::tribool reSolve(int sz)
+    {
+      smt[slv].pop(sz);
+      auto res = smt[slv].solve();
+      if (res == true)
+        can_get_model = true;
+      return res;
     }
 
     /**
@@ -413,9 +469,9 @@ namespace ufo
       filter (exp, bind::IsConst (), back_inserter (cnstr_vars));
       if (cnstr_vars.size() == 1)
       {
-        smt.reset();
-        smt.assertExpr (exp);
-        if (smt.solve ()) {
+        smt[slv].reset();
+        smt[slv].assertExpr (exp);
+        if (smt[slv].solve ()) {
           getModelPtr();
           if (m == NULL) return exp;
           return mk<EQ>(cnstr_vars[0], m->eval(cnstr_vars[0]));
@@ -525,13 +581,14 @@ namespace ufo
     bool flatten(Expr fla, ExprVector& prjcts, bool splitEqs, ExprVector& vars,
                  function<Expr(Expr, ExprVector& vars)> qe) // lazy DNF-ization
     {
-      smt.reset();
+      bool reset = true;
       Expr tmp = fla;
-      while (isSat(tmp, false))
+      while (isSat(tmp, reset))
       {
         prjcts.push_back(qe(getTrueLiterals(fla, splitEqs), vars)); // if qe is identity, then it's pure DNF
         if (prjcts.back() == NULL) return false;
         tmp = mk<NEG>(prjcts.back());
+        reset = false;
       }
       return true;
     }
@@ -672,90 +729,90 @@ namespace ufo
       outs () << ")\n";
 
       // old version (to  merge, maybe?)
-//      smt.reset();
-//      smt.assertExpr(form);
-//      smt.toSmtLib (outs());
+//      smt[slv].reset();
+//      smt[slv].assertExpr(form);
+//      smt[slv].toSmtLib (outs());
 //      outs().flush ();
     }
   };
 
-  /**
-   * Horn-based interpolation over particular vars
-   */
-  inline Expr getItp(Expr A, Expr B, ExprVector& sharedVars)
-  {
-    ExprFactory &efac = A->getFactory();
-    EZ3 z3(efac);
 
-    ExprVector allVars;
-    filter (mk<AND>(A,B), bind::IsConst (), back_inserter (allVars));
+    /**
+     * Horn-based interpolation over particular vars
+     */
+    inline Expr getItp(Expr A, Expr B, ExprVector& sharedVars)
+    {
+      ExprFactory &efac = A->getFactory();
+      EZ3 z3(efac);
 
-    ExprVector sharedTypes;
+      ExprVector allVars;
+      filter (mk<AND>(A,B), bind::IsConst (), back_inserter (allVars));
 
-    for (auto &var: sharedVars) {
-      sharedTypes.push_back (bind::typeOf (var));
-    }
-    sharedTypes.push_back (mk<BOOL_TY> (efac));
+      ExprVector sharedTypes;
 
-    // fixed-point object
-    ZFixedPoint<EZ3> fp (z3);
-    ZParams<EZ3> params (z3);
-    params.set (":engine", "pdr");
-    params.set (":xform.slice", false);
-    params.set (":xform.inline-linear", false);
-    params.set (":xform.inline-eager", false);
-    fp.set (params);
-
-    Expr errRel = bind::boolConstDecl(mkTerm<string> ("err", efac));
-    fp.registerRelation(errRel);
-    Expr errApp = bind::fapp (errRel);
-
-    Expr itpRel = bind::fdecl (mkTerm<string> ("itp", efac), sharedTypes);
-    fp.registerRelation (itpRel);
-    Expr itpApp = bind::fapp (itpRel, sharedVars);
-
-    fp.addRule(allVars, boolop::limp (A, itpApp));
-    fp.addRule(allVars, boolop::limp (mk<AND> (B, itpApp), errApp));
-
-    tribool res;
-    try {
-      res = fp.query(errApp);
-    } catch (z3::exception &e){
-      char str[3000];
-      strncpy(str, e.msg(), 300);
-      outs() << "Z3 ex: " << str << "...\n";
-      exit(55);
-    }
-
-    if (res) return NULL;
-
-    return fp.getCoverDelta(itpApp);
-  }
-
-  /**
-   * Horn-based interpolation
-   */
-  inline Expr getItp(Expr A, Expr B)
-  {
-    ExprVector sharedVars;
-
-    ExprVector aVars;
-    filter (A, bind::IsConst (), back_inserter (aVars));
-
-    ExprVector bVars;
-    filter (B, bind::IsConst (), back_inserter (bVars));
-
-    // computing shared vars:
-    for (auto &var: aVars) {
-      if (find(bVars.begin(), bVars.end(), var) != bVars.end())
-      {
-        sharedVars.push_back(var);
+      for (auto &var: sharedVars) {
+        sharedTypes.push_back (bind::typeOf (var));
       }
+      sharedTypes.push_back (mk<BOOL_TY> (efac));
+
+      // fixed-point object
+      ZFixedPoint<EZ3> fp (z3);
+      ZParams<EZ3> params (z3);
+      params.set (":engine", "pdr");
+      params.set (":xform.slice", false);
+      params.set (":xform.inline-linear", false);
+      params.set (":xform.inline-eager", false);
+      fp.set (params);
+
+      Expr errRel = bind::boolConstDecl(mkTerm<string> ("err", efac));
+      fp.registerRelation(errRel);
+      Expr errApp = bind::fapp (errRel);
+
+      Expr itpRel = bind::fdecl (mkTerm<string> ("itp", efac), sharedTypes);
+      fp.registerRelation (itpRel);
+      Expr itpApp = bind::fapp (itpRel, sharedVars);
+
+      fp.addRule(allVars, boolop::limp (A, itpApp));
+      fp.addRule(allVars, boolop::limp (mk<AND> (B, itpApp), errApp));
+
+      tribool res;
+      try {
+        res = fp.query(errApp);
+      } catch (z3::exception &e){
+        char str[3000];
+        strncpy(str, e.msg(), 300);
+        outs() << "Z3 ex: " << str << "...\n";
+        exit(55);
+      }
+
+      if (res) return NULL;
+
+      return fp.getCoverDelta(itpApp);
     }
 
-    return getItp(A, B, sharedVars);
-  };
+    /**
+     * Horn-based interpolation
+     */
+    inline Expr getItp(Expr A, Expr B)
+    {
+      ExprVector sharedVars;
 
+      ExprVector aVars;
+      filter (A, bind::IsConst (), back_inserter (aVars));
+
+      ExprVector bVars;
+      filter (B, bind::IsConst (), back_inserter (bVars));
+
+      // computing shared vars:
+      for (auto &var: aVars) {
+        if (find(bVars.begin(), bVars.end(), var) != bVars.end())
+        {
+          sharedVars.push_back(var);
+        }
+      }
+
+      return getItp(A, B, sharedVars);
+    };
 }
 
 #endif

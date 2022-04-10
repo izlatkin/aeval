@@ -29,8 +29,6 @@ namespace ufo
     Expr extraLemmas;
     ExprMap invs;
 
-    ExprVector bindVars1;
-
     int tr_ind; // helper vars
     int pr_ind;
     int k_ind;
@@ -44,6 +42,9 @@ namespace ufo
     vector<map<int, ExprVector> > kVersVals;
 
     public:
+
+    vector<ExprVector> bindVars;
+    map<int, ExprVector> bindLocVars;
 
     BndExpl (CHCs& r, int l, bool d = false) :
       m_efac(r.m_efac), ruleManager(r), u(m_efac), lookahead(l), debug(d) {}
@@ -162,15 +163,20 @@ namespace ufo
       return replaceAll(pref, bindVars.back(), ruleManager.invVars[r]);
     }
 
-    vector<ExprVector> bindVars;
-    map<int, ExprVector> bindLocVars;
-
     Expr toExpr(vector<int>& trace)
     {
       ExprVector ssa;
       getSSA(trace, ssa);
       return conjoin(ssa, m_efac);
     }
+
+    // increm
+    map <vector<int>, ExprVector> ssas;
+    map <vector<int>, vector<ExprVector>> ssaBindVars;
+    map <vector<int>, vector<map<int, ExprVector>>> ssaLocVars;
+    map <vector<int>, vector<int>> ssaBindVarIndex;
+    map <vector<int>, vector<int>> ssaLocVarIndex;
+    map <vector<int>, vector<map<int, ExprVector>>> ssaKVers;
 
     void getSSA(vector<int>& trace, ExprVector& ssa)
     {
@@ -179,20 +185,50 @@ namespace ufo
       bindLocVars.clear();
       kVers.clear();
       ExprVector bindVars1 = ruleManager.chcs[trace[0]].srcVars;
-      int bindVar_index = 0;
-      int locVar_index = 0;
+      int bindVarIndex = 0;
+      int locVarIndex = 0;
+
+      int ccm = 0;
+      vector<int> ctr;
+      for (auto it = ssas.begin(); it != ssas.end(); ++it)
+      {
+        int j = 0;
+        while (j < trace.size() && j < (it->first).size())
+        {
+          if (trace[j] != (it->first)[j]) break;
+          j++;
+        }
+        if (j > ccm)
+        {
+          ccm = j;
+          ctr = it->first;
+        }
+      }
 
       for (int s = 0; s < trace.size(); s++)
       {
+        if (s < ccm)
+        {
+          ssa.push_back(ssas[ctr][s]);
+          bindVars.push_back(ssaBindVars[ctr][s]);
+          bindVars1 = bindVars.back();
+          ssaBindVarIndex[trace].push_back(ssaBindVarIndex[ctr][s]);
+          bindVarIndex = ssaBindVarIndex[trace].back();
+          ssaLocVarIndex[trace].push_back(ssaLocVarIndex[ctr][s]);
+          locVarIndex = ssaLocVarIndex[trace].back();
+          ssaLocVars[trace].push_back(ssaLocVars[ctr][s]);
+          bindLocVars = ssaLocVars[trace].back();
+          ssaKVers[trace].push_back(ssaKVers[ctr][s]);
+          kVers = ssaKVers[trace].back();
+          continue;
+        }
         auto &step = trace[s];
         bindVars2.clear();
         HornRuleExt& hr = ruleManager.chcs[step];
         Expr body = hr.getBody(s == trace.size() - 1);
         if (!hr.isFact && extraLemmas != NULL) body = mk<AND>(extraLemmas, body);
         if (!hr.isFact && invs[hr.srcRelation] != NULL)
-        {
           body = mk<AND>(invs[hr.srcRelation], body);
-        }
 
         body = replaceAll(body, hr.srcVars, bindVars1);
 
@@ -209,16 +245,15 @@ namespace ufo
           }
           if (!kept)
           {
-            Expr new_name = mkTerm<string> ("__bnd_var_" + to_string(bindVar_index++), m_efac);
-            bindVars2.push_back(cloneVar(hr.dstVars[i],new_name));
+            Expr new_name = mkTerm<string> ("__bnd_var_" + to_string(bindVarIndex++), m_efac);
+            bindVars2.push_back(cloneVar(hr.dstVars[i], new_name));
           }
-
-          body = replaceAll(body, hr.dstVars[i], bindVars2[i]);
         }
+        body = replaceAll(body, hr.dstVars, bindVars2);
 
         for (int i = 0; i < hr.locVars.size(); i++)
         {
-          Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVar_index++), m_efac);
+          Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVarIndex++), m_efac);
           Expr var = cloneVar(hr.locVars[i], new_name);
           bindLocVars[s].push_back(var);
 
@@ -239,7 +274,14 @@ namespace ufo
         ssa.push_back(body);
         bindVars.push_back(bindVars2);
         bindVars1 = bindVars2;
+        ssaBindVarIndex[trace].push_back(bindVarIndex);
+        ssaLocVarIndex[trace].push_back(locVarIndex);
+        ssaLocVars[trace].push_back(bindLocVars);
+        ssaKVers[trace].push_back(kVers);
       }
+
+      ssas[trace] = ssa;
+      ssaBindVars[trace] = bindVars;
     }
 
     inline static void getKeyVars (Expr fla, Expr key, Expr &var)
