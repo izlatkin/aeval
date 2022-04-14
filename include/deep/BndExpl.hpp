@@ -225,12 +225,33 @@ namespace ufo
         auto &step = trace[s];
         bindVars2.clear();
         HornRuleExt& hr = ruleManager.chcs[step];
-        Expr body = hr.getBody(s == trace.size() - 1);
+        bool usesKeys;
+        for (int i = 0; i < hr.locVars.size(); i++)
+        {
+          Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVarIndex++), m_efac);
+          Expr var = cloneVar(hr.locVars[i], new_name);
+          bindLocVars[s].push_back(var);
+
+          for (auto & a : mKeys)
+          {
+            for (int num = 0; num < a.second->rule.size(); num++)
+            {
+              if (a.second->rule[num] == &hr)
+              {
+                if (a.second->locPos[num] == i)
+                {
+                  kVers[a.first].push_back(var);
+                  usesKeys = true;
+                }
+              }
+            }
+          }
+        }
+        Expr body = hr.getBody(!usesKeys); // LBTG no longer supported. TODO
+
         if (!hr.isFact && extraLemmas != NULL) body = mk<AND>(extraLemmas, body);
         if (!hr.isFact && invs[hr.srcRelation] != NULL)
           body = mk<AND>(invs[hr.srcRelation], body);
-
-        body = replaceAll(body, hr.srcVars, bindVars1);
 
         for (int i = 0; i < hr.dstVars.size(); i++)
         {
@@ -249,26 +270,9 @@ namespace ufo
             bindVars2.push_back(cloneVar(hr.dstVars[i], new_name));
           }
         }
+
+        body = replaceAll(body, hr.srcVars, bindVars1);
         body = replaceAll(body, hr.dstVars, bindVars2);
-
-        for (int i = 0; i < hr.locVars.size(); i++)
-        {
-          Expr new_name = mkTerm<string> ("__loc_var_" + to_string(locVarIndex++), m_efac);
-          Expr var = cloneVar(hr.locVars[i], new_name);
-          bindLocVars[s].push_back(var);
-
-          for (auto & a : mKeys)
-          {
-            for (int num = 0; num < a.second->rule.size(); num++)
-            {
-              if (a.second->rule[num] == &hr)
-              {
-                if (a.second->locPos[num] == i)
-                  kVers[a.first].push_back(var);
-              }
-            }
-          }
-        }
         body = replaceAll(body, hr.locVars, bindLocVars[s]);
 
         ssa.push_back(body);
@@ -287,14 +291,14 @@ namespace ufo
     inline static void getKeyVars (Expr fla, Expr key, Expr &var)
     {
       if (isOpX<EQ>(fla) && isOpX<PLUS>(fla->right()) && fla->right()->right() == key){
-        assert (var == NULL);
+        //assert (var == NULL);
         var = fla->left();
       } else if (isOpX<EQ>(fla) && isOpX<NEQ>(fla->right()) && fla->right()->right() == mk<UN_MINUS>(key)){
-        assert (var == NULL);
+        //assert (var == NULL);
         var = fla->left();
       } else if (isOpX<EQ>(fla) && isOpX<EQ>(fla->right()) &&
                  isOpX<UN_MINUS>(fla->right()->right()) && fla->right()->right()->left() == key){
-        assert (var == NULL);
+        //assert (var == NULL);
         var = fla->left();
       } else {
         for (unsigned i = 0; i < fla->arity(); i++)

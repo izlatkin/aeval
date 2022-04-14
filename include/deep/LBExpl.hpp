@@ -24,7 +24,6 @@ namespace ufo
         tot++;
         return true;
       }
-      // outs () << "   >>  cover: " << tr << ", " << c << ", " << chc.covered.size() << "/" << chc.bodies.size() << "\n";
 
       for (int i = 0; i < chc.bodies.size(); i++)
       {
@@ -32,24 +31,12 @@ namespace ufo
         if (find(chc.covered.begin(), chc.covered.end(), i) == chc.covered.end())
         {
           if (!chc.isQuery)
-          {
             b = replaceAll(b, chc.dstVars, bindVars[tr]);
-            for (auto v : bindVars[tr])
-              b = replaceAll(b, v, u.getModel(v));
-          }
           if (!chc.isFact)
-          {
             b = replaceAll(b, chc.srcVars, bindVars[tr-1]);
-            for (auto v : bindVars[tr-1])
-              b = replaceAll(b, v, u.getModel(v));
-          }
 
           b = replaceAll(b, chc.locVars, bindLocVars[tr]);
-          for (auto v : bindLocVars[tr])
-            b = replaceAll(b, v, u.getModel(v));
-
-          SMTUtils u2(m_efac);
-          if (u2.isSat(b))
+          if (bool(u.eval(b)))
           {
             bodiesCnjs.push_back(chc.bodies[i]);
             chc.covered.push_back(i);
@@ -57,7 +44,6 @@ namespace ufo
           }
         }
       }
-
       return chc.covered.size() == chc.bodies.size();
     }
 
@@ -126,7 +112,7 @@ namespace ufo
       {
         if (find(todoCHCs.begin(), todoCHCs.end(), a.back()) == todoCHCs.end() &&
             find(ruleManager.loopheads.begin(), ruleManager.loopheads.end(),
-                 ruleManager.chcs[a.back()].srcRelation) == ruleManager.loopheads.end())
+                 ruleManager.chcs[a.back()].dstRelation) == ruleManager.loopheads.end())
           a.pop_back();
         else break;
       }
@@ -141,41 +127,37 @@ namespace ufo
       // TODO: num of conjuncts
     }
 
-   void print(vector<int> &g)
-   {
-     outs () << "  ";
-     for (auto f : g)
-       outs () << "  " << ruleManager.chcs[f].dstRelation << "("
-                       << ruleManager.chcs[f].covered.size() << "/"
-                       << ruleManager.chcs[f].bodies.size() << ")" << " -> ";
-     outs () << "\n";
-   }
+    void print(vector<int> &g)
+    {
+      outs () << "  ";
+      for (auto f : g)
+        outs () << "  " << ruleManager.chcs[f].dstRelation << "("
+                        << ruleManager.chcs[f].covered.size() << "/"
+                        << ruleManager.chcs[f].bodies.size() << ")" << " -> ";
+      outs () << "\n";
+    }
 
-    vector<vector<int>> consideredThisRound;
-    bool getNext(vector<vector<int>> & cntr, vector<int> &n)
+    bool getNext(vector<vector<int>> & cntr, vector<vector<int>>::iterator & n)
     {
       int curMax = 0;
-      for (int i = cntr.size() - 1; i >= 0; i --)
+      for (auto it = cntr.begin(); it != cntr.end();)
       {
         int cur = 0;
-        auto & g = cntr[i];
-
-        if (find(consideredThisRound.begin(), consideredThisRound.end(), g) !=
-                 consideredThisRound.end()) continue;
+        auto & g = *it;
 
         if (already_unsat(g))
         {
-          cntr.erase(find(cntr.begin(), cntr.end(), g));
+          it = cntr.erase(it);
           continue;
         }
         for (auto i : g) cur += weight(i);
         if (cur > curMax)
         {
-          n = g;
+          n = it;
           curMax = cur;
         }
+        ++it;
       }
-      consideredThisRound.push_back(n);
       return curMax > 0;
     }
 
@@ -190,15 +172,15 @@ namespace ufo
             todoCHCs.erase(g[i]);
       if (rem == todoCHCs.size())
       {
-        auto f = find(cntr.begin(), cntr.end(), g);
-        if (f != cntr.end()) cntr.erase(f);
         pruneLast(g);
         unique_push_back(g, prio2);
       }
       else
       {
-        outs () << "Rem TODOs: " << todoCHCs.size() << "    (sz = " << g.size() << ")" << "\n";
-        outs ().flush();
+        outs () << "Rem TODOs: " << todoCHCs.size()
+                << "    (sz = " << g.size() << ")" << "\n";
+        auto f = find(cntr.begin(), cntr.end(), g);
+        if (f != cntr.end()) cntr.erase(f);
         pruneLast(g);
         unique_push_back(g, prio1);
       }
@@ -207,19 +189,45 @@ namespace ufo
         if (getTest(false)) printTest();
     }
 
+    Expr addDisjContr (vector<int> & g)
+    {
+      ExprVector blocked;
+      for (int s = 0; s < g.size(); s++)
+      {
+        auto & chc = ruleManager.chcs[g[s]];
+        if (chc.bodiesSz > 1)
+        {
+          ExprVector varsToDisable;
+          for (int i = chc.locVars.size() - chc.bodiesSz, j = 0;
+                   i < chc.locVars.size(); i++, j++)
+            if (find(chc.covered.begin(), chc.covered.end(), j) !=
+                                          chc.covered.end())
+              varsToDisable.push_back(mk<NEG>(bindLocVars[s][i]));
+
+          if (!varsToDisable.empty())
+            blocked.push_back(conjoin(varsToDisable, m_efac));
+        }
+      }
+      if (blocked.empty()) return NULL;
+      return disjoin(blocked, m_efac);
+    }
+
     void oneRound(vector<vector<int>> & cntr, vector<vector<int>> & prio1,
                   vector<vector<int>>& prio2, vector<vector<int>>& prio3)
     {
       int sz;
-      outs() << "cntr sz = " << cntr.size() << "\n";
-      consideredThisRound.clear();
       while (true)
       {
-        vector<int> g;
-        if (!getNext(cntr, g)) break;
+        vector<vector<int>>::iterator git;
+        if (!getNext(cntr, git)) break;
+        vector<int> g = *git;
 
         ExprVector ssa;
         getSSA(g, ssa);
+        Expr tmp = addDisjContr(g);
+        bool added = tmp != NULL;
+        if (added) ssa.push_back(tmp);;
+
         auto res = u.isSatIncrem(ssa, sz);
         if (true == res)
         {
@@ -227,23 +235,23 @@ namespace ufo
         }
         else if (false == res)
         {
-          cntr.erase(find(cntr.begin(), cntr.end(), g));
-
+          cntr.erase(git);
           if (sz > 0)
           {
-            if (ruleManager.chcs[g[sz-1]].isQuery)
+            if (ruleManager.chcs[g.back()].isQuery)
             {
               auto h = g;
-              h.resize(sz-1);
-              u.reSolve(ssa.size() - sz + 1);
-              success(h, cntr, prio1, prio2);
+              h.resize(g.size()-1);
+              if (true == u.reSolve(added ? 2 : 1))
+                success(h, cntr, prio1, prio2);
             }
-            if (ruleManager.chcs[g[sz-1]].bodies.size() <= 1 ||
-                ruleManager.chcs[g[sz-1]].covered.size() == 0)
-            {
-              g.resize(sz);
-              unsat_prefs.insert(g);
-            }
+            if (!added)
+              if (ruleManager.chcs[g[sz-1]].bodies.size() <= 1 ||
+                  ruleManager.chcs[g[sz-1]].covered.size() == 0)
+              {
+                g.resize(sz);
+                unsat_prefs.insert(g);
+              }
 
             pruneLast(g);
             unique_push_back(g, prio3);

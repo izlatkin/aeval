@@ -80,7 +80,13 @@ namespace ufo
     }
 
     ExprSet allVars;
-    Expr getModel() { return getModel(allVars); }
+    Expr getModel()
+    {
+      allVars.clear();
+      for (auto & c : pushed[slv])
+        filter (c, bind::IsConst (), inserter (allVars, allVars.begin()));
+      return getModel(allVars);
+    }
 
     void getModel (ExprSet& vars, ExprMap& e)
     {
@@ -111,7 +117,7 @@ namespace ufo
         slv = smt.size();
         smt.push_back(ZSolver<EZ3>(z3));
         pushed.push_back({});
-      //  outs () << "   new solver: " << slv << "\n";
+        // outs () << "   new solver: " << slv << "\n";
         smt[slv].reset();
       }
       for (auto & c : cnjs)
@@ -196,7 +202,7 @@ namespace ufo
       }
       if (csz > v.size() / 3)  // heuristic
       {
-        //outs () << "  reusing solver " << cslv << " with " << csz << " pushed things\n";
+        // outs () << "  reusing solver " << cslv << " with " << csz << " pushed things\n";
         sz = csz;
         slv = cslv;
         int psz = pushed[slv].size();
@@ -207,6 +213,7 @@ namespace ufo
         }
         if (sz == v.size())
         {
+          m = NULL;
           boost::tribool res = smt[slv].solve ();
           can_get_model = res ? true : false;
           return res;
@@ -264,6 +271,8 @@ namespace ufo
     boost::tribool reSolve(int sz)
     {
       smt[slv].pop(sz);
+      pushed[slv].resize(pushed[slv].size()-sz);
+      m = NULL;
       auto res = smt[slv].solve();
       if (res == true)
         can_get_model = true;
@@ -472,6 +481,7 @@ namespace ufo
         smt[slv].reset();
         smt[slv].assertExpr (exp);
         if (smt[slv].solve ()) {
+          m = NULL;
           getModelPtr();
           if (m == NULL) return exp;
           return mk<EQ>(cnstr_vars[0], m->eval(cnstr_vars[0]));

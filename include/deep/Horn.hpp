@@ -37,10 +37,12 @@ namespace ufo
     ExprVector locVars;
 
     Expr body;
+    Expr bodyShort;
     Expr head;
 
     // for TG:
     ExprVector bodies;
+    int bodiesSz;
     vector<int> covered;
 
     Expr srcRelation;
@@ -73,15 +75,10 @@ namespace ufo
         else it = locVars.erase(it);
     }
 
-    Expr getBody(bool last)
+    Expr getBody(bool sh)
     {
-      if (!last || bodies.size() <= 1) return body;
-
-      ExprSet notCovered;
-      for (int i = 0; i < bodies.size(); i++)
-        if (find(covered.begin(), covered.end(), i) == covered.end())
-          notCovered.insert(bodies[i]);
-      return disjoin(notCovered, body->getFactory());
+      if (sh && bodiesSz == 1) return bodyShort;
+      return body;
     }
   };
 
@@ -312,12 +309,12 @@ namespace ufo
                                  origDstSymbs, invVarsPrime[hr.dstRelation], lin);
 
         hr.body = conjoin(lin, m_efac);
-        chcsOrig.push_back(hr); // reserve copy
-        if (doElim >= 1 && !hr.isQuery)
+        // if (doElim >= 1 && !hr.isQuery)
         {
-          hr.body = eliminateQuantifiers(hr.body, hr.locVars, doArithm);
-          hr.body = u.removeITE(hr.body);
+          hr.bodyShort = eliminateQuantifiers(hr.body, hr.locVars, doArithm);
+//          hr.bodyShort = u.removeITE(hr.bodyShort);
           hr.shrinkLocVars();
+          chcsOrig.push_back(hr); // reserve copy
         }
         ++it;
       }
@@ -380,7 +377,8 @@ namespace ufo
         // if (chcs[i].isQuery) continue;
         ExprVector vars2keep;
         u.flatten(chcs[i].body, chcs[i].bodies, false, vars2keep, [](Expr a, ExprVector& b){return a;});
-        if (!lb && chcs[i].bodies.size() > 1)
+        chcs[i].bodiesSz = chcs[i].bodies.size();
+        if (!lb && chcs[i].bodiesSz > 1)
         {
           toErase.push_back(i);
           for (auto & p : chcs[i].bodies)
@@ -391,6 +389,17 @@ namespace ufo
             chcs.push_back(n);
           }
           chcs[i].bodies.clear();
+        }
+        if (lb && chcs[i].bodiesSz > 1)
+        {
+          ExprVector tmp;
+          for (int j = 0; j < chcs[i].bodies.size(); j++)
+          {
+            chcs[i].locVars.push_back(bind::boolConst
+              (mkTerm<string> ("_aux_" + lexical_cast<string>(j), m_efac)));
+            tmp.push_back(mk<AND>(chcs[i].locVars.back(), chcs[i].bodies[j]));
+          }
+          chcs[i].body = disjoin(tmp, m_efac);
         }
       }
 
@@ -1015,7 +1024,7 @@ namespace ufo
 
       for (auto & r : endRels)
         findCycles(mk<TRUE>(m_efac), r, av);
-    // print(false, true);
+      // print(false, true);
       outs () << "global traces num: " << acyclic.size() << "\n";
       for (auto & a : cycles)
         outs () << "  traces num for: " << a.first << ": " << a.second.size() << "\n";
