@@ -97,7 +97,8 @@ int main (int argc, char ** argv)
   set<int> nums;
   getNums(nums, getStrValue("--keys", NULL, argc, argv));
   bool to_skip = getBoolValue("--no-term", false, argc, argv);
-  int lookahead = getIntValue("--lookahead", 0, argc, argv);
+  int lookahead = getIntValue("--lookahead", 3, argc, argv);
+  bool prio = getBoolValue("--prio", false, argc, argv);
   bool lb = getBoolValue(OPT_LB, false, argc, argv);
   bool lmax = getBoolValue(OPT_LMAX, false, argc, argv);
 
@@ -131,6 +132,6 @@ int main (int argc, char ** argv)
 
   testgen(string(argv[argc-1]), nums, max_attempts, to, densecode, aggressivepruning,
                      do_dl, do_elim, do_disj, do_prop, d_m, d_p, d_d, d_s,
-                     to_skip, invMode, lookahead, lb, lmax, debug);
+                     to_skip, invMode, lookahead, lb, lmax, prio, debug);
   return 0;
 }

@@ -10,11 +10,12 @@ namespace ufo
   class LBExpl : public BndExpl
   {
     protected:
-    //
+    bool prio;
 
     public:
 
-    LBExpl (CHCs& r, int l, bool d = false) : BndExpl(r, l, d) {}
+    LBExpl (CHCs& r, int l, bool p, bool d = false) :
+      BndExpl(r, l, d), prio(p) {}
 
     bool checkCovered(int tr, int c, int &tot)
     {
@@ -80,6 +81,23 @@ namespace ufo
       return n;
     }
 
+    Expr getPost(Expr loophead, vector<int> &o, int end)
+    {
+      for (auto & a : postsRev[loophead])
+      {
+        int i = end;
+        int j = a.first.size() - 1;
+        while (i >= 0 && j >= 0)
+        {
+          if (o[i] != a.first[j]) break;
+          i--;
+          j--;
+        }
+        if (j == -1) return a.second;
+      }
+      return mk<TRUE>(m_efac);
+    }
+
     void unroll(vector<int> &o, vector<vector<int>> &n)
     {
       for (Expr l : ruleManager.loopheads)
@@ -88,8 +106,11 @@ namespace ufo
         {
           if (ruleManager.chcs[o[i]].dstRelation == l)
           {
-            for (auto & a : ruleManager.cycles[l])
+            Expr tmp = getPost(l, o, i);
+            // outs () << "  unroll: " << tmp << ": " << postPre[l][tmp].size() <<"\n";
+            for (auto & a : (isOpX<TRUE>(tmp) ? ruleManager.cycles[l] : postPre[l][tmp]))
             {
+              if (ruleManager.chcs[a.back()].dstRelation != l) continue;
               if (emptCycls[a])
               {
                 if (emptCyclsVisited[a]) continue;
@@ -144,12 +165,6 @@ namespace ufo
       {
         int cur = 0;
         auto & g = *it;
-
-        if (already_unsat(g))
-        {
-          it = cntr.erase(it);
-          continue;
-        }
         for (auto i : g) cur += weight(i);
         if (cur > curMax)
         {
@@ -170,6 +185,15 @@ namespace ufo
         if (find(todoCHCs.begin(), todoCHCs.end(), g[i]) != todoCHCs.end())
           if (checkCovered(i, g[i], tot))
             todoCHCs.erase(g[i]);
+
+      if (tot > 0)
+      {
+        outs () << "\nNEW TEST: ";
+        print(g);
+        outs () << "\n\n";
+        if (getTest(false)) printTest();
+      }
+
       if (rem == todoCHCs.size())
       {
         pruneLast(g);
@@ -179,14 +203,12 @@ namespace ufo
       {
         outs () << "Rem TODOs: " << todoCHCs.size()
                 << "    (sz = " << g.size() << ")" << "\n";
+        outs().flush();
         auto f = find(cntr.begin(), cntr.end(), g);
         if (f != cntr.end()) cntr.erase(f);
         pruneLast(g);
         unique_push_back(g, prio1);
       }
-
-      if (tot > 0)
-        if (getTest(false)) printTest();
     }
 
     Expr addDisjContr (vector<int> & g)
@@ -220,8 +242,8 @@ namespace ufo
       {
         vector<vector<int>>::iterator git;
         if (!getNext(cntr, git)) break;
-        vector<int> g = *git;
 
+        vector<int> g = *git;
         ExprVector ssa;
         getSSA(g, ssa);
         Expr tmp = addDisjContr(g);
@@ -245,13 +267,17 @@ namespace ufo
               if (true == u.reSolve(added ? 2 : 1))
                 success(h, cntr, prio1, prio2);
             }
-            if (!added)
-              if (ruleManager.chcs[g[sz-1]].bodies.size() <= 1 ||
-                  ruleManager.chcs[g[sz-1]].covered.size() == 0)
-              {
-                g.resize(sz);
-                unsat_prefs.insert(g);
-              }
+
+            int i;
+            for (i = 0; i < g.size() && i < sz; i++)
+              if (ruleManager.chcs[g[i]].bodies.size() > 1 ||
+                  ruleManager.chcs[g[i]].covered.size() > 0)
+                break;
+            if (i == sz || i == g.size())
+            {
+              g.resize(i);
+              unsat_prefs.insert(g);   // currently unuses? TODO
+            }
 
             pruneLast(g);
             unique_push_back(g, prio3);
@@ -272,41 +298,194 @@ namespace ufo
       cntr = tmp;
     }
 
-    void exploreRec(vector<vector<int>> & traces, int lvl, string name, int batch = 20)
+    void exploreRec(vector<vector<int>> & traces, int lvl, string name)
     {
-      int it = 0;
-      while (it < traces.size())
+      outs () << "\n-----------------\nentering lvl: " << lvl << ", \"" << name << "\"\n";
+      vector<vector<int>> traces_prt;
+
+      if (lvl == 0)
+        traces_prt = traces;
+      else
+        for (int j = 0; j < traces.size(); j++)
+          unroll(traces[j], traces_prt);
+
+      if (traces_prt.empty()) return;
+      outs () << "considering " << traces_prt.size() << " traces\n";
+
+      vector<vector<int>> traces_prio, traces_unsat_cond, traces_unsat;
+      oneRound(traces_prt, traces_prio, traces_unsat_cond, traces_unsat);
+
+      if (!prio)  // TODO: check for duplicates, play with order
       {
-        outs () << "entering lvl: " << lvl << ", \"" << name << "\", batch " << it << "\n";
-        vector<vector<int>> traces_prt;
+        traces_prt.insert(traces_prt.end(), traces_prio.begin(), traces_prio.end());
+        traces_prt.insert(traces_prt.end(), traces_unsat_cond.begin(), traces_unsat_cond.end());
+        traces_prt.insert(traces_prt.end(), traces_unsat.begin(), traces_unsat.end());
+      }
 
-        if (lvl == 0)
-        {
-          traces_prt = traces;
-          it = traces.size();
-        }
-        else
-          for (int j = 0; j < batch && it < traces.size(); it++, j++)
-            unroll(traces[it], traces_prt);
+      // rec.calls :
+      exploreRec(traces_prt, lvl + 1, "next");
 
-        outs () << "considering " << traces_prt.size() << " traces\n";
-
-        vector<vector<int>> traces_prio, traces_unsat_cond, traces_unsat;
-        oneRound(traces_prt, traces_prio, traces_unsat_cond, traces_unsat);
-
-        // rec.calls :
+      if (prio)
+      {
         exploreRec(traces_prio, lvl + 1, "prio sats");
-        exploreRec(traces_prt, lvl + 1, "next");
         exploreRec(traces_unsat_cond, lvl + 1, "unsats cond");
         exploreRec(traces_unsat, lvl + 1, "unsats");
+      }
 
-        outs () << "exiting lvl: " << lvl << "\n";
+      outs () << "exiting lvl: " << lvl << "\n";
+    }
+
+    map<Expr, map<Expr, vector<vector<int>>>> pres, posts;
+    map<Expr, map<vector<int>, Expr>> postsRev;
+
+    // mainly for local comp now, but might be used incrementally?
+    map<vector<int>, Expr> ppprefs, ppsuffs;
+    map<Expr, map<Expr, vector<vector<int>>>> postPre;
+
+    void computePrePost(vector<int> & t)
+    {
+      ExprVector ssa;
+      getSSA(t, ssa);
+      Expr srcRel = ruleManager.chcs[t[0]].srcRelation;
+      Expr dstRel = ruleManager.chcs[t.back()].dstRelation;
+      Expr pre = mk<TRUE>(m_efac);
+      Expr post = mk<TRUE>(m_efac);
+      auto & srcVars = ruleManager.invVars[srcRel];
+      auto & dstVars = ruleManager.invVars[dstRel];
+
+      int sz;
+      bool done = false;
+      if (!dstVars.empty())
+      {
+        for (auto & b : posts[dstRel])
+        {
+          ExprVector tmp = ssa;
+          tmp.push_back(mkNeg(b.first));
+          if (false == u.isSatIncrem(tmp, sz))
+          {
+            b.second.push_back(t);
+            postsRev[dstRel][t] = post;
+            done = true;
+            break;
+          }
+        }
+
+        if (!done)
+        {
+          for (int i = t.size() < lookahead ? 0 : t.size() - lookahead; i < ssa.size(); i++)
+          {
+            vector<int> tmp;
+            tmp.insert(tmp.begin(), t.begin(), t.begin() + i + 1);
+            if (ppprefs[tmp] == NULL)
+            {
+              post = keepQuantifiers(mk<AND>(post, ssa[i]), bindVars[i]);
+              ppprefs[tmp] = post;
+            }
+            else
+            {
+              post = ppprefs[tmp];
+            }
+          }
+          post = replaceAll(post, bindVars.back(), dstVars);
+          posts[dstRel][post].push_back(t);
+          postsRev[dstRel][t] = post;
+        }
+      }
+      if (!srcVars.empty())
+      {
+        done = false;
+        for (auto & b : pres[srcRel])
+        {
+          ExprVector tmp = ssa;
+          tmp.push_back(mkNeg(b.first));
+          if (false == u.isSatIncrem(tmp, sz))
+          {
+            b.second.push_back(t);
+            done = true;
+            break;
+          }
+        }
+        if (!done)
+        {
+          for(int i = t.size() <= lookahead ? ssa.size() - 1 : lookahead; i >= 0; i--)
+          {
+            vector<int> tmp;
+            tmp.insert(tmp.begin(), t.begin() + i, t.end());
+            if (ppsuffs[tmp] == NULL)
+            {
+              pre = keepQuantifiers(mk<AND>(pre, ssa[i]),
+                                      (i == 0 ? srcVars : bindVars[i - 1]));
+              ppsuffs[tmp] = pre;
+            }
+            else
+            {
+              pre = ppsuffs[tmp];
+            }
+          }
+
+          pres[srcRel][pre].push_back(t);
+        }
+      }
+    }
+
+    void getPrePostConds()
+    {
+      SMTUtils u2(m_efac);                //  to free mem
+
+      // proto, for now. to merge
+      for (auto it = ruleManager.acyclic.begin(); it != ruleManager.acyclic.end(); ++it)
+      {
+        auto & t = *it;
+        int i = 0;
+        int j = 0;
+        while (j < t.size())
+        {
+          bool lhfound = false;
+          for (Expr l : ruleManager.loopheads)
+          {
+            if (ruleManager.chcs[t[j]].dstRelation == l || j == t.size() - 1)
+            {
+              vector<int> tmp;
+              for (int k = i; k <= j; k++) tmp.push_back(t[k]);
+              ExprVector ssa;
+              getSSA(tmp, ssa);
+              computePrePost(tmp);
+              outs () << ".";
+              outs ().flush();
+              lhfound = true;
+              break;
+            }
+          }
+          if (lhfound) i = j + 1;
+          j++;
+        }
+      }
+
+      for (auto & a : ruleManager.cycles)
+      {
+        int k = 0;
+        outs () << "total for " << a.first << ": " << a.second.size() << "\n";
+        for (auto & t : a.second)
+        {
+          computePrePost(t);
+          outs () << '.';
+          outs().flush();
+        }
+        outs () << "\n total pres: " << pres[a.first].size() << "\n";
+        outs () << " total posts: " << posts[a.first].size() << "\n";
+
+        for (auto & d : posts[a.first])
+          for (auto & b : pres[a.first])
+            if (true == u2.isSat(b.first, d.first))
+              postPre[a.first][d.first].insert(postPre[a.first][d.first].end(),
+                                              b.second.begin(), b.second.end());
       }
     }
 
     map<vector<int>, bool> emptCycls, emptCyclsVisited;
     void findUselessPaths()
     {
+      SMTUtils u2(m_efac); //  to free mem
       outs () << "total for global: " << ruleManager.acyclic.size() << "\n";
       for (auto it = ruleManager.acyclic.begin(); it != ruleManager.acyclic.end(); )
       {
@@ -326,7 +505,7 @@ namespace ufo
               ExprVector ssa;
               getSSA(tmp, ssa);
               int sz;
-              if (false == u.isSatIncrem(ssa, sz)) unsat = true;
+              if (false == u2.isSatIncrem(ssa, sz)) unsat = true;
               lhfound = true;
               break;
             }
@@ -357,8 +536,8 @@ namespace ufo
           ssa.push_back(mk<NEG>(conjoin(tmp, m_efac)));
 
           int sz;
-          auto res = u.isSatIncrem(ssa, sz);
-          if (res == false)
+          auto res = u2.isSatIncrem(ssa, sz);
+          if (res == false && sz != -1)
           {
             if (sz == ssa.size()) emptCycls[t] = true;
             else
@@ -377,6 +556,7 @@ namespace ufo
     {
       outs () << "LB-MAX\n";
       findUselessPaths();
+      getPrePostConds();
 
       fillTodos();
       outs () << "Total TODOs: " << todoCHCs.size() << "\n";
